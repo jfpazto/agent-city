@@ -14,6 +14,14 @@ Una ciudad 2.5D en el navegador para ver de un vistazo todas tus sesiones de Cla
 - **Avisos**: avioneta con pancarta, notificación del sistema y campanilla opcional cuando algo te necesita o termina.
 - **Acciones desde la fachada**: abrir una sesión en su app, crear una nueva o mandarla a la Papelera.
 
+![Mapa de la ciudad: barrio Claude y barrio Codex, un edificio por proyecto](docs/capturas/mapa.png)
+
+| Fachada de un proyecto | Panel de una sesión |
+|---|---|
+| ![Fachada con un piso por sesión, ayudantes de subagentes y barra de contexto](docs/capturas/fachada.png) | ![Panel con tokens, subagentes, contexto y avería](docs/capturas/panel.png) |
+
+Capturas de la demo (`?demo=24&projects=4` y `?demo=12`): proyectos y sesiones inventados.
+
 Todo corre en tu máquina. El colector solo escucha en `127.0.0.1` y nada sale de ella.
 
 ## Requisitos
