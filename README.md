@@ -63,11 +63,6 @@ Codex no necesita instalar nada: se leen sus rollouts de `~/.codex/sessions`.
 
 `http://localhost:5173/?demo=24&projects=4` pinta una ciudad de ejemplo sin colector. Con `npm run dev:web` basta para verla.
 
-## Limitaciones conocidas
-
-- Codex: sin hooks todavía, así que no hay «te necesita» ni coste para sus sesiones. El % de contexto y Rebobinar sí funcionan: salen de sus rollouts.
-- En Claude, el % de contexto sale de la statusline, que solo ejecuta Claude Code en la terminal (la app de escritorio no la ejecuta).
-
 ## Sistemas operativos
 
 | | macOS | Linux | Windows |
