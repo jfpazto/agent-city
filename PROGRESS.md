@@ -520,3 +520,9 @@
   Hecho: https://github.com/jfpazto/agent-city, verificado clonando desde GitHub (`./init.sh` 253/253). Es un repo aparte sin historial común: los cambios de aquí hay que copiarlos allí.
 - Codex investigado (sin cambios de código): hooks activados pero sin aprobación guardada; tus sesiones nunca piden permiso (`never` + acceso total); coste, % de contexto y Rebobinar se pueden sacar de los rollouts sin hooks. Detalle en `feature_list.json` → `codex-event-probe`.
 - Codex sin hooks (petición del autor): % de contexto (`contextPercent` del parser de rollouts) y Rebobinar (turnos [inicio, fin] → `codexFrame`). Verificado con datos reales y en el navegador; `./init.sh` 257/257. Falta llevarlo a `agent-city`.
+
+
+### Actualización de capturas del README (2026-10-24)
+
+- Reemplazadas mapa, fachada y panel desde la demo con nombres ficticios; README y nombres de proyectos demo alineados. Guía manual §29.
+- Verificación visual de las tres capturas y consola sin errores en el repo de origen; ./init.sh: typecheck y 257/257 tests.

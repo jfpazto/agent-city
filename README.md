@@ -20,7 +20,7 @@ Una ciudad 2.5D en el navegador para ver de un vistazo todas tus sesiones de Cla
 |---|---|
 | ![Fachada con un piso por sesión, ayudantes de subagentes y barra de contexto](docs/capturas/fachada.png) | ![Panel con tokens, subagentes, contexto y avería](docs/capturas/panel.png) |
 
-Capturas de la demo (`?demo=24&projects=4` y `?demo=12`): proyectos y sesiones inventados.
+Capturas actualizadas el 24 de octubre de 2026 con la demo (`?demo=24&projects=4`): Tienda online, App del clima, Blog de recetas y Juego de ajedrez. Todos los proyectos y sesiones son inventados.
 
 Todo corre en tu máquina. El colector solo escucha en `127.0.0.1` y nada sale de ella.
 

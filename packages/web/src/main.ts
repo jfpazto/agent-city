@@ -491,7 +491,7 @@ if (demo !== null) {
   const states: SessionState[] = ["trabajando", "te_necesita", "para_revisar", "dormida"];
   const n = Math.max(0, Math.min(500, Number.parseInt(demo, 10) || 0));
   const projectCount = Math.max(1, Math.min(n || 1, Number.parseInt(params.get("projects") ?? "4", 10) || 4));
-  const names = ["FrontAgentico", "Segundo cerebro", "Portafolio", "PriceMap"];
+  const names = ["Tienda online", "App del clima", "Blog de recetas", "Juego de ajedrez"];
   const title = ["Panel de métricas", "Permiso para Bash", "Revisión de cambios", "Preparar tareas"];
   const counts = new Map<string, number>();
   sessions = Array.from({ length: n }, (_, i) => {

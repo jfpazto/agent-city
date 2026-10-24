@@ -308,3 +308,13 @@ Sustituyen a las pasarelas del apartado 14: donde allí se habla de pasarelas, a
 ```bash
 npm run autostart:uninstall && npm run hooks:uninstall
 ```
+
+
+## 29. Capturas del README (2026-10-24)
+
+1. Abre `http://localhost:5173/?demo=24&projects=4`: aparecen los proyectos ficticios Tienda online, App del clima, Blog de recetas y Juego de ajedrez en ambos barrios. Guarda el mapa en `docs/capturas/mapa.png`.
+2. En «Ir a un proyecto…», elige «Claude · Tienda online»: guarda la fachada con tres pisos, ayudantes y contexto en `docs/capturas/fachada.png`.
+3. Elige «Claude · Blog de recetas» y abre «Revisión de cambios 1»: el panel muestra el proyecto ficticio, tokens, subagentes, contexto al 91 % y avería por límite de uso. Guarda `docs/capturas/panel.png`.
+4. Abre `README.md`: las tres imágenes deben cargar y corresponder a esos proyectos, sin nombres ni rutas reales.
+
+Resultado: capturas renovadas y revisadas visualmente; consola del navegador sin errores.
