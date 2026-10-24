@@ -1,0 +1,872 @@
+[
+  {
+    "id": "bootstrap-monorepo",
+    "area": "infra",
+    "title": "Esqueleto del repo con colector y front arrancables",
+    "user_visible_behavior": "`npm run dev` arranca el colector (con un /health que responde) y una página Vite vacía con un canvas de PixiJS.",
+    "depends_on": [],
+    "status": "accepted",
+    "verification": [
+      "npm install",
+      "npm run typecheck && npm test (un test trivial pasa)",
+      "curl 127.0.0.1:<puerto>/health devuelve ok",
+      "Abrir la URL de Vite y ver el canvas"
+    ],
+    "evidence": [
+      "2026-10-19 ./init.sh: typecheck ok, vitest 2/2 passed, exit 0",
+      "curl /health -> {\"ok\":true,\"service\":\"collector\"}; /nope -> 404",
+      "lsof: TCP 127.0.0.1:4317 (LISTEN)",
+      "Navegador: localhost:5173, título 'Ciudad de agentes', canvas azul cielo y consola sin errores",
+      "Tras parar dev, no queda ningún proceso escuchando en 4317/5173",
+      "2026-10-19 validador independiente: accept (reejecutó init.sh, health, 404, lsof 127.0.0.1 y título del front)"
+    ],
+    "notes": "Actualizar init.sh a la variante con bootstrap. Ver docs/technical-discovery.md. Versiones instaladas: vite 8, vitest 5, typescript 7, pixi.js 8. El postinstall de esbuild quedó bloqueado por npm, pero vite funciona. Dependencia extra justificada: @types/node (typecheck del colector). /health compara la URL exacta (con query devuelve 404), aceptable por ahora."
+  },
+  {
+    "id": "hook-event-probe",
+    "area": "colector",
+    "title": "El colector recibe y registra los eventos de los hooks",
+    "user_visible_behavior": "Un endpoint POST /hook guarda cada evento en un log en disco; un script instala los hooks en ~/.claude/settings.json (con copia de seguridad).",
+    "depends_on": [
+      "bootstrap-monorepo"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Lanzar una sesión en la app de escritorio y ver UserPromptSubmit, PreToolUse, Notification y Stop en el log",
+      "Con el colector apagado, la sesión de Claude Code sigue funcionando sin errores"
+    ],
+    "evidence": [
+      "2026-10-19 ./init.sh: 9/9 tests (hook 4, instalador 3, health 2)",
+      "send.sh con el colector apagado: 0,34 s, exit 0, sin stdout; encendido: el evento se escribe en el jsonl",
+      "Instalador sobre una copia del settings.json real: idempotente; tras uninstall queda idéntico (True)",
+      "Instalado en ~/.claude/settings.json con copia settings.json.bak-2026-10-19T10-59-43-360Z; los hooks ajenos se conservan",
+      "La app de escritorio emite PreToolUse en vivo (sin reiniciar la sesión)",
+      "Escenario 6 (sesión ce6bdaef, modo default): SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest (11:05:04), Notification permission_prompt (11:05:10), PostToolUse y Stop",
+      "Desviación de la spec: se añadió el evento PermissionRequest al instalador, porque Notification solo llega si el permiso tarda más de unos 6 s",
+      "Colector caído durante la primera prueba: send.sh falló en silencio sin afectar a la sesión (escenario 5 en real)",
+      "2026-10-19 validador independiente: accept (init.sh 9/9, instalador idempotente sobre una copia, send.sh con el colector apagado en 0,009 s y exit 0, hooks ajenos intactos)"
+    ],
+    "notes": "Resuelve la pregunta abierta sobre qué eventos emite la app de escritorio. Timeout ≤1 s, salida siempre con código 0, solo 127.0.0.1. Pendiente para features posteriores: notification_type de inactividad y SubagentStop, aún no observados."
+  },
+  {
+    "id": "session-state-machine",
+    "area": "colector",
+    "title": "Máquina de estados de sesión a partir de los eventos",
+    "user_visible_behavior": "El colector mantiene el estado de cada session_id (trabajando, te_necesita, para_revisar, dormida) según la tabla de docs/domain-model.md.",
+    "depends_on": [
+      "hook-event-probe"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Tests unitarios con secuencias de eventos reales anonimizadas, incluido el Notification de inactividad tras un Stop",
+      "GET /sessions devuelve los estados esperados"
+    ],
+    "evidence": [
+      "2026-10-19 ./init.sh: 21/21 tests (11 de sesiones y 2 HTTP nuevos)",
+      "Sesión real 466ce4d7: GET /sessions la mostró en te_necesita (permiso de Write pendiente) y después en para_revisar tras el Stop",
+      "Reproducción del log real: los 3 permisos (Bash, Write, Bash) en te_necesita hasta su PostToolUse, incluido el caso con una herramienta en paralelo",
+      "Desviación: el booleano pendingPermission pasó a ser una lista pending emparejada por tool_use_id (documentado en la spec y en domain-model)",
+      "Revisión tras validación (revise): opciones a (PostToolUseFailure) y b (llamada nueva de la misma herramienta resuelve el pendiente), session_id validado; 23/23 tests; el log real se reproduce sin regresiones; hooks reinstalados con PostToolUseFailure",
+      "2026-10-19 segunda validación independiente: accept (los 4 hallazgos resueltos, tabla = reduce() fila por fila, log real sin regresiones, 23/23)"
+    ],
+    "notes": "La función de transición debe ser pura y fácil de testear."
+  },
+  {
+    "id": "idle-timeout",
+    "area": "colector",
+    "title": "Paso a dormida por inactividad",
+    "user_visible_behavior": "Las sesiones sin eventos durante el tiempo configurado (30 min por defecto) pasan a dormida, salvo las que están en te_necesita.",
+    "depends_on": [
+      "session-state-machine"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Test con reloj simulado",
+      "te_necesita no cambia por el paso del tiempo"
+    ],
+    "evidence": [
+      "2026-10-19: test/idle.test.ts (expire puro con reloj inyectado, store.tick, te_necesita intacta tras 2 h, tiempo configurable, intervalo del servidor con timers falsos); init.sh 40/40.",
+      "2026-10-19: prueba real en 127.0.0.1:4399 con CIUDAD_IDLE_MINUTES=0.05 y hook/send.sh: trabajando y para_revisar → dormida a los 5 s, te_necesita sin cambio, un UserPromptSubmit la despierta.",
+      "2026-10-19 validador independiente: accept (57/57; límite >= idleMs, te_necesita no se duerme, CIUDAD_IDLE_MINUTES inválido → 30 min, intervalo se para al cerrar; prueba real en 4399 con 0.05 min: trabajando → dormida a los 4,5 s y te_necesita se mantiene). Notas menores: falta test WS de punta a punta del cambio a dormida; tickMs sin mínimo; idleMs NaN sin comprobar en createServer",
+      "2026-10-19: feature-validator → accept. init.sh 40/40 reejecutado; el hub WS reenvía todo aviso del store, así que tick llega al front. Nota: la validación la hizo la misma sesión que implementó."
+    ],
+    "notes": "Configurable con CIUDAD_IDLE_MINUTES (30 por defecto). Spec en docs/specs/idle-timeout.md."
+  },
+  {
+    "id": "ws-state-stream",
+    "area": "colector",
+    "title": "Envío del estado en vivo por WebSocket",
+    "user_visible_behavior": "El front recibe una instantánea al conectarse y los cambios de estado en menos de 2 s.",
+    "depends_on": [
+      "session-state-machine"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Test de integración: un cliente WS recibe el cambio tras un POST /hook",
+      "Probar la reconexión al reiniciar el colector"
+    ],
+    "evidence": [
+      "2026-10-19 ./init.sh: 28/28 tests (WS: snapshot, cambio en menos de 500 ms, removed, ignorados, 403; subscribe y listener que falla)",
+      "Navegador: el front conecta y lista las sesiones; un PermissionRequest sintético apareció como te_necesita sin recargar",
+      "Reconexión: con el colector parado, el front muestra «desconectado»; al rearrancar, el navegador vuelve a abrir el socket (lsof ESTABLISHED con 4317 en menos de 5 s). El canvas no repinta mientras el panel está oculto (rAF en pausa)",
+      "curl con Origin https://evil.example -> 403",
+      "Escenario 7 parcial: los eventos reales de esta sesión se ven en vivo como trabajando; el permiso se probó con un evento sintético, no con un permiso real",
+      "2026-10-19 validador independiente: accept (snapshot y cambio en 5 ms con cliente ws; 403 para localhost.evil.com, 127.0.0.1.nip.io, null y evil.example; 101 para localhost:5173)",
+      "Hallazgos menores corregidos: server.close() ya no se cuelga con clientes WS (test < 1 s) y el front descarta mensajes malformados (applyMessage con test); 31/31"
+    ],
+    "notes": ""
+  },
+  {
+    "id": "transcript-token-parser",
+    "area": "colector",
+    "title": "Tokens y modelo leídos del transcript",
+    "user_visible_behavior": "Para cada sesión, el colector suma los tokens de entrada, salida y caché, y detecta el modelo a partir de su .jsonl.",
+    "depends_on": [
+      "bootstrap-monorepo"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Tests con un fixture .jsonl anonimizado",
+      "Comparar con una suma hecha a mano sobre un transcript real"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 77/77 (9 nuevos en packages/collector/test/transcript.test.ts con el fixture inventado test/fixtures/transcript-basic.jsonl: deduplicado por message.id, modelo sin <synthetic>, rutas permitidas, lectura incremental con corte en medio de un carácter multibyte, truncado, lecturas simultáneas, /hook → GET /sessions, setMetrics avisa solo si cambia).",
+      "2026-10-19: transcript real de esta máquina (sesión d986bc50…) con el colector en 127.0.0.1:4399: GET /sessions = claude-opus-5-5, input 110, output 29437, cacheRead 7556865, cacheCreation 126695; suma hecha a mano en Python (deduplicando por id): idéntica.",
+      "2026-10-19: feature-validator independiente (subagente): accept. 77/77; suma real repetida en 127.0.0.1:4411 (idéntica); /etc/hosts como transcript_path → 204 sin leerlo. Bajos: sin realpath (symlink dentro de la carpeta), mapas del lector no se vacían al retirar sesiones, tick lee también las dormidas."
+    ],
+    "notes": "Lectura incremental por offset en bytes. Cada message.id cuenta una vez (Claude Code lo repite por bloque de contenido). Subagentes fuera de alcance. Spec en docs/specs/transcript-token-parser.md."
+  },
+  {
+    "id": "transcript-tool-counts",
+    "area": "colector",
+    "title": "Recuento de herramientas y archivos tocados",
+    "user_visible_behavior": "Las métricas incluyen el número de comandos (Bash), lecturas (Read/Grep/Glob) y acciones web, y la lista de archivos editados.",
+    "depends_on": [
+      "transcript-token-parser"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Tests con un fixture .jsonl"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 87/87 (fixture inventado test/fixtures/transcript-tools.jsonl: comandos 2, lecturas 3, web 2, tool_use id repetido una vez, archivos sin repetir y en orden, llega a GET /sessions).",
+      "2026-10-19: transcript real (sesión d986bc50…): tools {commands 31, reads 2, web 0} y 5 archivos editados = recuento a mano en Python.",
+      "2026-10-19: feature-validator independiente (subagente): accept. 90/90; recuento real repetido por el validador (34/39/15, 9 archivos) igual a mano."
+    ],
+    "notes": "Spec en docs/specs/transcript-tool-counts.md."
+  },
+  {
+    "id": "cost-estimate",
+    "area": "colector",
+    "title": "Coste estimado por sesión",
+    "user_visible_behavior": "Cada sesión muestra su coste estimado en $ a precio de API, según una tabla de precios configurable por modelo.",
+    "depends_on": [
+      "transcript-token-parser"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Test con precios fijos y tokens conocidos"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 87/87 (packages/collector/test/pricing.test.ts: precios fijos y tokens conocidos = 8,1 $, modelo desconocido → undefined, prefijo de ids con fecha, sesión con varios modelos, CIUDAD_PRICES_FILE; transcript.test.ts: coste de un fixture con Sonnet y Opus vía /hook).",
+      "2026-10-19: transcript real (sesión d986bc50…) en 127.0.0.1:4398: costUsd 2,734028 = cálculo a mano en Python (precio por mensaje y modelo, deduplicado por id).",
+      "Tabla: skill claude-api de Claude Code, Current Models, caché 2026-10-06 (PRICES_SOURCE en collector/src/pricing.ts).",
+      "2026-10-19 (tras el revise del validador): caché de 1 h a 2 × entrada (desglose usage.cache_creation.ephemeral_1h_input_tokens) y sin precio por prefijo para modelos nuevos (claude-opus-5-7 → undefined). 92/92. Transcript real con 1 097 194 tokens de caché de 1 h: 28,749307 $ = cálculo a mano.",
+      "2026-10-19: feature-validator independiente: revise (caché de 1 h a 1,25×, precio por prefijo) → corregido → revalidación independiente: accept. 92/92."
+    ],
+    "notes": "Los precios son configurables; anotar la fuente y la fecha de la tabla. Spec en docs/specs/cost-estimate.md."
+  },
+  {
+    "id": "cold-start-rebuild",
+    "area": "colector",
+    "title": "Reconstrucción de la torre al arrancar",
+    "user_visible_behavior": "Al arrancar, el colector detecta los transcripts con actividad en las últimas 24 h y crea sus sesiones en estado dormida con métricas.",
+    "depends_on": [
+      "transcript-token-parser",
+      "session-state-machine"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Reiniciar el colector con sesiones abiertas: aparecen todas"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 97/97 (collector/test/coldstart.test.ts: solo .jsonl de primer nivel < 24 h, subagentes y .txt fuera, sesiones dormidas con título/cwd/plantas/métricas, no pisa sesiones vivas, un evento posterior la despierta sin cambiar de planta).",
+      "2026-10-19: main.ts real en 127.0.0.1:4396: «arranque en frío: 23 sesiones»; find -mtime -1 da 23; GET /sessions: 23, todas dormidas, todas con tokens y plantas únicas; esta sesión aparece con su título personalizado y claude-opus-5-5.",
+      "2026-10-19: feature-validator independiente (subagente): accept. 108/108; prueba real repetida con main.ts (4411/4412): 23 sesiones = find -mtime -1. Menor: setMetrics también sobre sesiones vivas (inocuo)."
+    ],
+    "notes": "Plantas por orden de actividad; pueden cambiar entre reinicios hasta que haya persistencia. Spec en docs/specs/cold-start-rebuild.md."
+  },
+  {
+    "id": "tower-render-floors",
+    "area": "front",
+    "title": "Torre con un piso por sesión",
+    "user_visible_behavior": "El front pinta una torre pixel art de dos columnas con un piso por sesión (iniciales y título) y pisos «EN VENTA» para rellenar.",
+    "depends_on": [
+      "ws-state-stream"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Captura con 3 sesiones simuladas",
+      "Las plantas se mantienen estables al recargar"
+    ],
+    "evidence": [
+      "2026-10-19 ./init.sh: 42/42 tests (layout: 3 sesiones, huecos, planta 13 → 8 filas, vacía, centrado; iniciales y recorte)",
+      "Navegador ?demo=3: 3 pisos ocupados y 5 «EN VENTA»; ?demo=0: 4 filas vacías; ?demo=14: 8 filas recortadas por arriba; sin errores en consola",
+      "Escenario 5 con colector real: SessionStart sintéticos de prueba-uno y prueba-dos → plantas 1 y 2; SessionEnd de prueba-uno → planta 1 «EN VENTA» sin mover las demás; tras recargar, mismas plantas",
+      "Escenario 6: a 768×900 la torre se recentra y el suelo queda abajo",
+      "2026-10-19 validador independiente: accept (42/42; reglas de layout, colores de DESIGN.md, sin fugas al redibujar, demo sin WS). Notas menores: plantas negativas o duplicadas sin test; .claude/launch.json añadido"
+    ],
+    "notes": "Seguir DESIGN.md: píxel duro, escalado nearest."
+  },
+  {
+    "id": "floor-state-colors",
+    "area": "front",
+    "title": "Color del piso según el estado",
+    "user_visible_behavior": "Cada piso se ilumina en verde, rojo (con parpadeo), amarillo o gris según su estado, con icono y etiqueta además del color.",
+    "depends_on": [
+      "tower-render-floors"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Provocar cada estado con sesiones reales; el color cambia en menos de 2 s"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 48/48 tests (6 nuevos en packages/web/test/stateStyle.test.ts: tokens, etiquetas e iconos únicos, solo te_necesita parpadea, alpha en [0,35, 0,85]).",
+      "2026-10-19: navegador integrado en http://localhost:5174/?demo=4 (5173 ocupado por el Vite del usuario): cuatro pisos verde/rojo/amarillo/gris con icono y etiqueta; dos capturas a 0,8 s muestran el rojo con distinta intensidad; consola sin errores.",
+      "2026-10-19: el usuario confirmó la prueba manual con sesiones reales: los colores cambian según el estado (docs/pruebas-manuales.md §3).",
+      "2026-10-19: feature-validator independiente (subagente): accept. init.sh 48/48 y tsc limpio; solo hallazgos menores (imports duplicados de @ciudad/shared, ancho del chip sin test, titleBg fuera de spec, escenario EN VENTA sin test propio)."
+    ],
+    "notes": "Spec en docs/specs/floor-state-colors.md."
+  },
+  {
+    "id": "needs-you-bubble",
+    "area": "front",
+    "title": "Bocadillo con el mensaje de la petición",
+    "user_visible_behavior": "Un piso en rojo muestra un bocadillo con el último mensaje de Notification.",
+    "depends_on": [
+      "floor-state-colors"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Pedir un permiso en una sesión real y ver el texto"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 62/62 (5 nuevos en packages/web/test/bubble.test.ts: partido por palabras, «…» al recortar, palabras largas, solo te_necesita con mensaje).",
+      "2026-10-19: navegador integrado en http://localhost:5174/?demo=4: el piso rojo enseña el bocadillo en dos líneas dentro del piso; los demás sin bocadillo; consola sin errores.",
+      "2026-10-19: el usuario pidió un permiso en una sesión real y vio el texto en el bocadillo: funciona.",
+      "2026-10-19: feature-validator independiente (subagente): accept. init.sh 68/68. Menor: el bocadillo (y=34) tapa los 6 px inferiores del recuadro de iniciales."
+    ],
+    "notes": "Spec en docs/specs/needs-you-bubble.md."
+  },
+  {
+    "id": "tower-scroll-zoom",
+    "area": "front",
+    "title": "Scroll y zoom de la torre",
+    "user_visible_behavior": "Con muchas sesiones, la torre se recorre con scroll vertical y se acerca o aleja con la rueda.",
+    "depends_on": [
+      "tower-render-floors"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Simular 40 sesiones y recorrer la torre a más de 50 fps"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 68/68 (6 nuevos en packages/web/test/camera.test.ts: sin scroll si cabe, límites suelo/tejado con 40 sesiones, zoom 0,5–2, centrado al alejar, punto fijo bajo el cursor).",
+      "2026-10-19: navegador integrado en http://localhost:5174/?demo=40: capturas abajo, en el tejado tras 60 eventos de rueda y alejada con Ctrl+rueda; 60 fps medidos con requestAnimationFrame durante el scroll; consola sin errores.",
+      "2026-10-19: feature-validator independiente (subagente): accept. init.sh 68/68. Menores: preventDefault de la rueda siempre; zoomAt supone que offsetX/Y coinciden con app.screen (cierto mientras el canvas ocupe la ventana)."
+    ],
+    "notes": "Rueda = scroll; Ctrl/⌘ + rueda = zoom. Spec en docs/specs/tower-scroll-zoom.md."
+  },
+  {
+    "id": "status-bar-counters",
+    "area": "front",
+    "title": "Barra de estado con contadores",
+    "user_visible_behavior": "Arriba se ven los contadores por estado y los tokens totales, actualizados en vivo.",
+    "depends_on": [
+      "ws-state-stream",
+      "transcript-token-parser"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Los contadores coinciden con GET /sessions"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 90/90 (web/test/summary.test.ts: recuento por estado, suma de tokens, torre vacía, formato k/M/G con coma).",
+      "2026-10-19: colector propio en 127.0.0.1:4397 con 3 sesiones sintéticas sobre transcripts reales y Vite en 5174: barra «1 trabajando, 1 te necesita, 1 revisar, 0 dormida, tokens 10,30 M» = GET /sessions (10 295 020). Tras Stop y SessionEnd: «0, 0, 2, 0, 10,21 M» = GET /sessions (10 214 180), sin recargar. Consola sin errores.",
+      "2026-10-19: formatTokens corregido en los límites (999 950 → «1,00 M», no «1000,0 k»), con test.",
+      "2026-10-19: feature-validator independiente (subagente): accept. Menores: formatTokens en los límites (ya corregido), la barra recrea sus objetos Pixi en cada render."
+    ],
+    "notes": "Tokens totales = entrada + salida + caché. Spec en docs/specs/status-bar-counters.md."
+  },
+  {
+    "id": "floor-search",
+    "area": "front",
+    "title": "Buscador de pisos",
+    "user_visible_behavior": "Al escribir en el buscador, la torre se desplaza hasta el piso cuyo título coincide y lo resalta.",
+    "depends_on": [
+      "status-bar-counters",
+      "tower-scroll-zoom"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Buscar una sesión por un fragmento de su título"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 102/102 (web/test/search.test.ts: sin mayúsculas ni tildes, fragmento ordenado por planta, vacío, Intro da la vuelta; centerOn).",
+      "2026-10-19: colector real con 23 sesiones reconstruidas (4396) y Vite en 5174: «floor-state» → planta 22 resaltada y centrada dentro de los límites, «1/1»; «feature» → 1/3, Intro 2/3 y vuelta a 1/3; Esc limpia; «/» enfoca.",
+      "2026-10-19: feature-validator independiente (subagente): accept. Menores: el contador n/total no se recalcula al llegar sesiones nuevas hasta la siguiente tecla; foco del input solo por color del borde."
+    ],
+    "notes": "Buscador HTML sobre la barra (accesible). Spec en docs/specs/floor-search.md."
+  },
+  {
+    "id": "detail-panel-metrics",
+    "area": "front",
+    "title": "Panel de detalle con métricas",
+    "user_visible_behavior": "Al hacer clic en un piso se abre un panel con el título, el estado, el modelo, los tokens, el coste, los recuentos y los archivos; se cierra con Esc.",
+    "depends_on": [
+      "tower-render-floors",
+      "transcript-tool-counts",
+      "cost-estimate"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Los datos del panel coinciden con los del colector para una sesión real",
+      "Se puede usar con el teclado"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 108/108 (web/test/panel.test.ts: panelModel completo y sin métricas («—»), formatUsd, relativeTime, sessionAt con cámara movida y zoom, EN VENTA y fuera → null).",
+      "2026-10-19: colector real con 23 sesiones reconstruidas (4396) y Vite en 5174: clic en el piso de esta sesión → panel; tras la relectura del transcript, panel y GET /sessions iguales campo a campo (10,27 $, 26.504.838 tokens con desglose 245/127.305/26.063.239/314.049, 89 comandos, 0 lecturas, 0 web, 6 archivos); se actualizó solo.",
+      "2026-10-19: teclado: Esc cierra; «/» → «idle» → Tab a «Abrir» → Intro abre el panel con el foco en ✕; Esc lo cierra y devuelve el foco a «Abrir». Consola sin errores.",
+      "2026-10-19: feature-validator independiente (subagente): accept. Sin innerHTML con datos de transcripts. Menores: role=dialog no modal sin trampa de foco; el teclado solo abre pisos vía buscador."
+    ],
+    "notes": "Panel HTML (role=dialog), todo por textContent. «Esta sesión» = totales de la sesión, no del día. Spec en docs/specs/detail-panel-metrics.md."
+  },
+  {
+    "id": "detail-panel-log",
+    "area": "front",
+    "title": "Bitácora en el panel de detalle",
+    "user_visible_behavior": "El panel muestra las últimas acciones de la sesión con su hora relativa («Ejecutando comandos», «Escribiendo código»…).",
+    "depends_on": [
+      "detail-panel-metrics"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Comparar con el transcript"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 122/122 (tests nuevos: collector/test/reviewed.test.ts, collector/test/log-days.test.ts con el fixture inventado fixtures/transcript-days.jsonl, y casos nuevos en web/test/panel.test.ts).",
+      "2026-10-19: la bitácora del panel para una sesión real coincide con un recuento independiente en Python sobre una copia congelada del transcript (20 últimas entradas idénticas).",
+      "2026-10-19: feature-validator independiente: accept. Bitácora solo con tipo de acción y hora; textContent; sin innerHTML."
+    ],
+    "notes": "Spec en docs/specs/detail-panel-log.md."
+  },
+  {
+    "id": "detail-panel-weekly-chart",
+    "area": "front",
+    "title": "Gráfico semanal de consumo",
+    "user_visible_behavior": "El panel muestra las barras de tokens por día de los últimos 7 días de esa sesión.",
+    "depends_on": [
+      "detail-panel-metrics"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Fixture con varios días"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 122/122 (tests nuevos: collector/test/reviewed.test.ts, collector/test/log-days.test.ts con el fixture inventado fixtures/transcript-days.jsonl, y casos nuevos en web/test/panel.test.ts).",
+      "2026-10-19: tokens de hoy del colector = suma a mano en Python sobre la copia congelada del transcript (44.047.983); el gráfico muestra 7 barras con la de hoy en verde.",
+      "2026-10-19: feature-validator independiente: accept. Tras sus avisos, la barra de hoy se rotula «hoy» (no solo color) y la spec describe el aria-description del contenedor. Menor: si el panel sigue abierto al pasar la medianoche, las barras se desplazan hasta la siguiente actualización."
+    ],
+    "notes": "Spec en docs/specs/detail-panel-weekly-chart.md."
+  },
+  {
+    "id": "quick-replies-copy",
+    "area": "front",
+    "title": "Respuestas rápidas al portapapeles",
+    "user_visible_behavior": "Los botones de respuesta rápida y el campo de texto copian la respuesta al portapapeles y muestran una confirmación.",
+    "depends_on": [
+      "detail-panel-metrics"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Pulsar y pegar en un editor"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 122/122 (tests nuevos: collector/test/reviewed.test.ts, collector/test/log-days.test.ts con el fixture inventado fixtures/transcript-days.jsonl, y casos nuevos en web/test/panel.test.ts).",
+      "2026-10-19: pulsar «Sí, continúa», escribir «Usa la rama main» + Copiar y «Abrir sesión» dan los avisos «Copiado: «Sí, continúa»», «Copiada tu respuesta», «Copiados título y carpeta: búscala en la app». En el navegador integrado la API asíncrona está bloqueada y entra el método de respaldo: «No, para aquí» llegó al portapapeles real del Mac (pbpaste, UTF-8 correcto).",
+      "2026-10-19: feature-validator independiente: accept. Nada sale a la red ni a la sesión; aviso role=status. Menor: sin test automático del respaldo del portapapeles (verificado a mano con pbpaste)."
+    ],
+    "notes": "No se envía nada a la sesión. Spec en docs/specs/quick-replies-copy.md."
+  },
+  {
+    "id": "open-session-link",
+    "area": "front",
+    "title": "Abrir la sesión desde el panel",
+    "user_visible_behavior": "El botón «Abrir sesión» abre la sesión en la app si hay deep link; si no, copia la ruta y el título de la sesión.",
+    "depends_on": [
+      "detail-panel-metrics"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Probar con una sesión real"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 122/122 (tests nuevos: collector/test/reviewed.test.ts, collector/test/log-days.test.ts con el fixture inventado fixtures/transcript-days.jsonl, y casos nuevos en web/test/panel.test.ts).",
+      "2026-10-19: investigación del esquema claude:// (code/continue solo acepta ids local_… o «last»; resume importa la sesión, descartado); el botón copia «título\\ncarpeta\\nsesión <id>» (comprobado en el navegador). Prueba con la app real: pendiente del usuario (pegar en la búsqueda de la app).",
+      "2026-10-19: feature-validator independiente: accept. Conclusión de la investigación bien fundada (continue solo acepta ids local_…). PENDIENTE DEL USUARIO: probar con la app real pegando el texto copiado en su búsqueda. Menor: el botón se llama «Abrir sesión» pero solo copia."
+    ],
+    "notes": "Antes, investigar si la app de escritorio tiene deep link. Spec en docs/specs/open-session-link.md."
+  },
+  {
+    "id": "review-clears-on-open",
+    "area": "front",
+    "title": "Abrir un piso amarillo lo marca como revisado",
+    "user_visible_behavior": "Abrir el panel de un piso en para_revisar lo pasa a dormida en el colector y en todas las vistas.",
+    "depends_on": [
+      "detail-panel-metrics"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Provocar un Stop, abrir el piso y ver que se apaga"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 122/122 (tests nuevos: collector/test/reviewed.test.ts, collector/test/log-days.test.ts con el fixture inventado fixtures/transcript-days.jsonl, y casos nuevos en web/test/panel.test.ts).",
+      "2026-10-19: colector propio en 127.0.0.1:4395 con arranque en frío (23 sesiones) y Vite en 5174; Stop sintético a una sesión real → para_revisar; al abrir su panel con el botón «Abrir», la barra pasó de «1 revisar / 22 dormida» a «0 revisar / 23 dormida» y GET /sessions dio dormida.",
+      "2026-10-19: feature-validator independiente: revise (decodeURIComponent sin try/catch podía tumbar el colector con un id mal codificado) → corregido (400 bad_id, tests %E0 y OPTIONS ajeno) → revalidación: accept. 124/124."
+    ],
+    "notes": "Necesita un endpoint POST /sessions/:id/reviewed. Spec en docs/specs/review-clears-on-open.md."
+  },
+  {
+    "id": "urgent-selector",
+    "area": "front",
+    "title": "Saber qué pisos son urgentes",
+    "user_visible_behavior": "Un piso es urgente cuando lleva más de 1 minuto seguido en te_necesita; deja de serlo al salir de rojo. Base de la avioneta y del aviso.",
+    "depends_on": [],
+    "status": "accepted",
+    "verification": [
+      "Tests vitest de la función pura: 59 s no urgente, 61 s urgente, sale de rojo y vuelve = episodio nuevo, snapshot inicial usa lastEventAt"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 131/131. web/test/urgent.test.ts (7 casos): transición vista 59 s no / 61 s sí; snapshot usa lastEventAt (inválido o futuro → ahora); otro evento en rojo no reinicia; salir y volver = episodio nuevo; orden por antigüedad en rojo; umbral 60 s fuera de desarrollo. Spec en docs/specs/urgent-selector.md.",
+      "2026-10-19: feature-validator independiente: accept; ./init.sh verde 137/137."
+    ],
+    "notes": "Lógica pura en web; el inicio del rojo se toma al ver la transición o, en el snapshot, de lastEventAt."
+  },
+  {
+    "id": "urgent-plane",
+    "area": "front",
+    "title": "Avioneta con pancarta de lo urgente",
+    "user_visible_behavior": "Mientras haya pisos urgentes, una avioneta pixel art cruza el cielo sobre la torre arrastrando una pancarta «N te necesita(n): título…»; vuelve a pasar mientras siga habiendo urgentes. Clic en la pancarta centra el primer piso urgente. Sin urgentes no aparece.",
+    "depends_on": [
+      "urgent-selector"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Captura con el navegador integrado con un piso en rojo >1 min",
+      "Clic en la pancarta centra el piso",
+      "Sin urgentes, no hay avioneta"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 133/133 (bannerText singular/plural/recorte y planeX en web/test/urgent.test.ts).",
+      "2026-10-19: colector propio en 127.0.0.1:4395 (CIUDAD_DATA_DIR en scratchpad, 24 sesiones en frío) y Vite en 5174 con VITE_COLLECTOR_WS hacia él. PermissionRequest sintético a 'prueba-urgente-1' a las 18:42:14; con el umbral real de 60 s, captura del navegador integrado hacia las 18:43:20 con la avioneta y la pancarta «1 te necesita: prueba» cruzando y volviendo a pasar.",
+      "2026-10-19: clic en la pancarta con la cámara abajo (y=0): la cámara pasa a y=732 y el piso rojo queda a la vista (captura); no se abre el panel. Los clics de ratón reales fallaban por la velocidad de la pancarta y el pane oculto, así que el clic se hizo con PointerEvent sobre el canvas en la posición de la pancarta (leída con un acceso temporal de depuración, ya quitado). Con Pixi eventMode el clic no llegaba: el clic se gestiona en el pointerup del canvas (hitsBanner).",
+      "2026-10-19: PostToolUse sintético → urgentes 0 y avioneta invisible (captura sin avioneta).",
+      "2026-10-19: feature-validator independiente: accept; ./init.sh verde 137/137."
+    ],
+    "notes": "Dibujo con Graphics de Pixi, sin assets externos; texto del título por Text de Pixi, nunca HTML. Ver DESIGN.md."
+  },
+  {
+    "id": "urgent-notification",
+    "area": "front",
+    "title": "Aviso del navegador cuando algo es urgente",
+    "user_visible_behavior": "Con la pestaña de la ciudad abierta y el permiso concedido (botón en la barra), cada piso que se vuelve urgente genera un aviso del sistema (Notification API) una sola vez por episodio; si varios se vuelven urgentes a la vez, un único aviso agrupado. Clic en el aviso enfoca la pestaña y centra el piso.",
+    "depends_on": [
+      "urgent-selector"
+    ],
+    "status": "accepted",
+    "verification": [
+      "Tests vitest de la decisión de avisar (uno por episodio, agrupado)",
+      "Prueba real: piso en rojo >1 min → un aviso; sigue en rojo → ninguno más; sale y vuelve → otro"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde, 137/137 (web/test/notify.test.ts: uno por episodio, sigue en rojo → ninguno, sale y vuelve → otro, agrupado, contenido y botón según permiso).",
+      "2026-10-19: navegador integrado con colector propio en 4395 y Vite en 5174: Notification.permission = denied en el pane y no se puede conceder; el botón muestra «Avisos bloqueados» desactivado y la app sigue funcionando. Con ?urgentMs=3000 (solo dev) y window.Notification sustituido por un registro: PermissionRequest sintético → 1 aviso «prueba te necesita / Necesita permiso para Bash» (16:47:46Z); siguiendo en rojo, ninguno más; PostToolUse + nuevo PermissionRequest → otro (16:47:59Z); dos sesiones en rojo a la vez → un único aviso «2 sesiones te necesitan» (16:48:07Z). NO verificado: un aviso real del sistema ni su clic (foco + centrar); queda para el usuario.",
+      "2026-10-19: feature-validator independiente: accept; ./init.sh verde 137/137. Aviso real del sistema y su clic pendientes de prueba manual del usuario (el navegador integrado deniega Notification)."
+    ],
+    "notes": "Solo navegador; sin osascript ni nada en el colector. Si el permiso está denegado, nada se rompe."
+  },
+  {
+    "id": "project-buildings",
+    "area": "ciudad",
+    "title": "Un edificio por proyecto/agente, con sus sesiones por pisos",
+    "user_visible_behavior": "Cada proyecto/agente tiene un edificio rotulado; las sesiones de su repositorio y worktrees ocupan pisos estables. La ciudad se recorre en ambos ejes y el buscador y los avisos localizan la sesión en su edificio.",
+    "depends_on": [
+      "tower-render-floors",
+      "tower-scroll-zoom",
+      "floor-search",
+      "detail-panel-metrics"
+    ],
+    "status": "passing",
+    "verification": [
+      "Repositorios distintos tienen edificios distintos; subcarpetas y worktrees comparten el de su repositorio",
+      "Altas, bajas y recarga conservan la posición de las sesiones supervivientes",
+      "Buscar por proyecto o sesión centra el piso correcto entre edificios; clic abre su panel",
+      "Comprobar ciudad vacía, varios proyectos, scroll horizontal, arrastre y zoom en navegador",
+      "./init.sh en verde"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh verde: typecheck y 147/147 tests (24 archivos). Base anterior: 137/137. Nuevos casos en collector/test/projects.test.ts y web/test/city.test.ts.",
+      "Identidad y store: raíz, subcarpetas, worktree externo, enlace, homónimos, fallback, metadatos inválidos, huecos, cambio de proyecto y siembra. Disposición: un edificio por proyecto, una sesión por piso, suelo común, huecos y vacío; orden estable tras recargar; búsqueda y selección con cámara y zoom.",
+      "Colector de prueba en 4394: arranque en frío reconstruyó 25 sesiones en 10 edificios. Hooks sintéticos desde el checkout real de FrontAgentico y su worktree epic-mclean-ee8489: mismo proyecto y pisos locales 5 y 6. Sesiones de prueba retiradas.",
+      "Navegador integrado en 741 × 827: demo=9 muestra tres proyectos; arrastre horizontal llega al tercero; búsqueda Web de producto encuentra sus 3 sesiones y abre su panel. Datos reales: FrontAgentico devuelve 1/5 y el panel identifica el proyecto y conserva métricas; consola sin errores. demo=0 muestra ciudad vacía; demo=20&projects=1 permite recorrer hasta la azotea con el rótulo debajo de los controles.",
+      "Captura sin datos reales: docs/design/evidence/project-buildings.png (demo=8&projects=2, dos edificios completos con sesiones por pisos).",
+      "Colector habitual reiniciado con launchctl kickstart del servicio ya instalado, sin cambiar su configuración. GET /sessions en 4317: 25 sesiones, 10 edificios, project.order y projectFloor presentes, sin colisiones; FrontAgentico agrupa 5 sesiones. Servidores temporales de prueba parados.",
+      "git diff --check sin errores. Guía manual, vocabulario, dominio, diseño, arquitectura, brief, discovery técnico y descripción de AGENTS actualizados. No se ha ejecutado validación independiente."
+    ],
+    "notes": "Spec en docs/specs/project-buildings.md. Implementada y verificada; pendiente validación independiente. Cambio indicado por el usuario: proyecto = agente = edificio; sesión = piso. Prioritaria respecto a Codex."
+  },
+  {
+    "id": "codex-event-probe",
+    "area": "colector",
+    "title": "Los hooks de Codex llegan al colector",
+    "user_visible_behavior": "Un instalador añade los hooks de Codex (hooks.json) apuntando al colector; cada evento de una sesión de Codex queda en el log con su origen marcado como codex.",
+    "depends_on": [
+      "hook-event-probe"
+    ],
+    "status": "not_started",
+    "verification": [
+      "Sesión real de Codex: ver en el log SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest y Stop con sus campos",
+      "Con el colector apagado, Codex sigue funcionando sin errores",
+      "Instalar y desinstalar deja la config de Codex idéntica"
+    ],
+    "evidence": [
+      "2026-10-23: implementado send.sh codex, /hook?agent=codex (400 con agente desconocido), log con agent, instalador hooks:install:codex|uninstall:codex. ./init.sh 227/227 (codex-hooks.test.ts: registro marcado, no toca el store, instalar 2 veces + desinstalar idéntico, borrar si no existía).",
+      "2026-10-23: colector real reiniciado; send.sh codex → línea {agent:'codex'} en el log y la sesión no aparece en /sessions. Colector apagado (puerto 4399): send.sh sale en 0,01 s con exit 0.",
+      "Falta: sesión real de Codex. Codex exige aprobar los hooks en su TUI (trusted_hash en config.toml); sin aprobarlos, codex exec no los ejecuta. Hooks ya instalados en ~/.codex/hooks.json."
+    ],
+    "notes": "Hipótesis desde el binario 0.163.0: mismos eventos y campos que Claude, más PostCompact, SubagentStart e Interrupt. La sonda la confirma o la corrige. Sigue not_started hasta la sesión real: Codex exige aprobar los hooks (ver docs/technical-discovery.md)."
+  },
+  {
+    "id": "codex-sessions",
+    "area": "colector",
+    "title": "Las sesiones de Codex son pisos de la torre",
+    "user_visible_behavior": "Las sesiones de Codex aparecen como pisos con su estado en vivo y una marca visual que las distingue de las de Claude; sus tokens salen de ~/.codex/sessions.",
+    "depends_on": [
+      "codex-event-probe",
+      "floor-state-colors",
+      "transcript-token-parser"
+    ],
+    "status": "passing",
+    "verification": [
+      "Una sesión real de Codex aparece, cambia de estado y se distingue de una de Claude",
+      "Tokens de Codex leídos del rollout jsonl"
+    ],
+    "evidence": [
+      "2026-10-21: ./init.sh en verde, 177/177 tests (7 nuevos en collector/test/codex.test.ts con rollout anonimizado).",
+      "2026-10-21: colector real reiniciado; /sessions muestra 12 sesiones agent:codex en 10 proyectos; el mapa pinta el barrio Codex con 10 edificios y 2 puentes automáticos, y la fachada de cerebro-master sus 3 pisos."
+    ],
+    "notes": "Añade agent: claude|codex a Session. Dirección acordada 2026-10-19: Claude y Codex tendrán barrios separados; el mismo proyecto Git puede representarse con un edificio por proveedor. Ver DESIGN.md y city-neighborhood-map; el mapa no forma parte de esta integración. 2026-10-21, a petición del autor: implementada leyendo los rollouts de ~/.codex/sessions (sondeo cada 3 s) en vez de esperar a los hooks; por eso no depende en la práctica de codex-event-probe. Sin estado te_necesita en Codex hasta tener hooks."
+  },
+  {
+    "id": "city-neighborhood-map",
+    "area": "front",
+    "title": "Ciudad superior por manzanas y barrios de Claude y Codex",
+    "user_visible_behavior": "La ciudad se recorre desde arriba en 2.5D, por calles y manzanas, con un barrio por proveedor. Seleccionar un edificio abre su fachada frontal y sus sesiones por pisos; al volver se conserva la cámara. Un mismo proyecto tiene un edificio en cada barrio si usa ambos proveedores.",
+    "depends_on": [
+      "tower-render-floors",
+      "tower-scroll-zoom",
+      "floor-search",
+      "detail-panel-metrics"
+    ],
+    "status": "passing",
+    "verification": [
+      "Mapa con barrios Claude y Codex rotulados y proyectos distribuidos por manzanas",
+      "Mismo repositorio con sesiones de ambos proveedores: edificio en cada barrio, sin mezclar sesiones",
+      "Arrastrar y acercar el mapa, entrar a un edificio, elegir un piso y volver conservando posición y zoom",
+      "Desde lo urgente se llega al barrio, edificio y sesión correctos",
+      "Controles de edificios accesibles con teclado y adaptación a ventanas estrechas",
+      "Crear/quitar relaciones manuales persistidas y conservar puentes automáticos",
+      "Detener la vida ambiental sin ocultar estados ni controles"
+    ],
+    "evidence": [
+      "2026-10-19: ./init.sh ejecutado en verde: typecheck y 160/160 tests en 25 archivos; 13 tests nuevos en packages/web/test/world.test.ts.",
+      "Navegador demo=24&projects=4: 8 edificios, 4 puentes automáticos; relación manual añade dos pasarelas, sobrevive a recarga y se elimina conservando las automáticas.",
+      "Navegador: arrastre/zoom, retorno con rótulo en idénticas coordenadas y anchura, selector/panel, búsqueda con foco, urgente estático, mapa vacío, fachada alta y Vida sí/no; consola sin errores.",
+      "Colector real: snapshot de 24 sesiones en 10 proyectos Claude coincide con el mapa; Codex vacío y panel real con métricas. Actualización posterior por WebSocket comprobada.",
+      "Capturas ficticias de implementación: docs/design/evidence/city-neighborhood-map.png y city-neighborhood-front.png. Guía manual actualizada. Pendiente validación independiente."
+    ],
+    "notes": "Implementación visual priorizada expresamente por el usuario (2026-10-19), sobre project-buildings ya implementada y passing. Sin cambiar su aceptación ni implementar la recogida real de Codex: sesiones antiguas se tratan como Claude; barrio Codex vacío si no llegan datos con agent=codex. Incluye vida ambiental y puentes automáticos por proyecto compartido y relaciones manuales locales entre proyectos. Ver docs/specs/city-neighborhood-map.md."
+  },
+  {
+    "id": "usage-limits",
+    "area": "full-stack",
+    "title": "Límites de uso de Claude y Codex: depósito de agua y central eléctrica",
+    "user_visible_behavior": "Cada barrio muestra cuánto queda de su límite de uso: en Claude, un depósito de agua (ventana de 5 h) con un embalse pequeño (semanal); en Codex, una central eléctrica con batería (5 h) y una fila de pilas (semanal). El nivel es lo que queda, con un rótulo de porcentaje y hora de recarga. Si el dato es antiguo se ve gris con «sin dato reciente»; pasada la hora de recarga se muestra recargado.",
+    "depends_on": [
+      "city-neighborhood-map",
+      "codex-sessions"
+    ],
+    "status": "passing",
+    "verification": [
+      "Codex: el colector lee rate_limits (primary 5 h, secondary semanal: used_percent, resets_at) de la última sesión y lo emite al front",
+      "Claude: un script de statusline instalable envía rate_limits al colector en 127.0.0.1, con timeout corto y salida 0; si la versión de Claude Code no lo aporta, el depósito queda en «sin dato»",
+      "Nivel, porcentaje y hora de recarga coinciden con los datos de origen en ambos barrios",
+      "Dato antiguo o hora de recarga pasada se muestran como «sin dato reciente» o recargado, nunca con la cifra caducada",
+      "Animaciones (goteo, vapor, farolas a media luz) se detienen con Vida: no sin ocultar la información",
+      "Tests con fixtures anonimizados y ./init.sh en verde"
+    ],
+    "evidence": [
+      "2026-10-21: ./init.sh en verde, 212/212 tests en 35 archivos y typecheck; tests nuevos en collector/test/usage.test.ts, web/test/usage.test.ts, hooks-install y stateClient.",
+      "Formato de Claude confirmado en la documentación incluida en el binario de Claude Code 2.1.304: statusline con rate_limits.five_hour|seven_day.{used_percentage, resets_at}.",
+      "Colector real reiniciado: data/usage.json con el rate_limits del rollout de Codex del 2026-10-19; el front muestra «5 h: recargado · semana: quedan 70 %».",
+      "Navegador demo=24&projects=4: depósito 32 %/embalse 70 % y central 6 % (ámbar)/2 de 4 pilas; textos accesibles; Vida no detiene vapor y goteo; consola sin errores; el subtítulo del barrio no choca con el rótulo.",
+      "2026-10-21: statusline instalada con npm run hooks:install (copia ~/.claude/settings.json.bak-2026-10-21T10-15-16-880Z). Sesión real de Claude Code en terminal: data/usage.json recibe 5 h 64 % usado (recarga 15:20) y semana 19 %; Claude Code muestra «64 % · faltan 36 % · reinicia en 3h05m» y la ciudad «quedan 36 %, recarga 15:20 · semana: quedan 81 %». Pendiente de validación independiente."
+    ],
+    "notes": "Pedida por el usuario el 2026-10-21. Comprobado ese día: las sesiones de ~/.codex/sessions incluyen rate_limits con primary/secondary y resets_at. Para Claude, los transcripts no lo traen; la fuente prevista es el JSON de statusline (sin verificar en la versión instalada). Ver docs/specs/usage-limits.md."
+  },
+  {
+    "id": "open-source-release",
+    "area": "repo",
+    "title": "Repositorio público y replicable: clonar, instalar y tener la misma ciudad",
+    "user_visible_behavior": "Cualquier persona puede clonar el repositorio, seguir el README y obtener la misma ciudad con sus propias sesiones de Claude Code y Codex. Lee ~/.claude y ~/.codex de quien lo instala, sin datos del autor.",
+    "depends_on": [
+      "usage-limits"
+    ],
+    "status": "in_progress",
+    "verification": [
+      "README con requisitos (macOS, versión de Node), instalación (npm install, ./init.sh, npm run hooks:install, npm run dev), qué toca en ~/.claude/settings.json y cómo desinstalar",
+      "LICENSE elegida por el autor y engines de Node en package.json",
+      "Sin datos personales en archivos publicados: nombre y rutas en PROGRESS.md, DESIGN.md, docs/ y specs; capturas de docs/design/evidence revisadas",
+      "Decisión explícita sobre el historial de git: publicar tal cual o repo nuevo con un solo commit inicial",
+      "Lo que solo funciona en macOS (autostart con launchctl, papelera ~/.Trash, enlaces claude:// y codex://) documentado o con alternativa",
+      "Prueba de clon limpio en otra carpeta o usuario: npm install y ./init.sh en verde, ciudad vacía sin errores y luego con sesiones propias",
+      "Repo público en GitHub solo con el visto bueno del autor"
+    ],
+    "evidence": [
+      "Sesión 057: datos personales sustituidos en docs; LICENSE MIT y engines (^22.12 || ^24 || >=26, lo que pide vitest); README al día. Clon limpio en carpeta temporal: npm install y ./init.sh en verde, colector y front con carpetas vacías sin errores, una sesión de prueba crea su edificio, instalador de hooks probado con CLAUDE_SETTINGS_PATH temporal. Soporte Linux/Windows (abrir sesiones, papelera, hooks en Node, arranque automático con systemd o carpeta Inicio) con platforms.test (8); ./init.sh 253/253. macOS real sin cambios (autostart:status, colector 45 sesiones)."
+    ],
+    "notes": "Pedida por el usuario el 2026-10-21 y aplazada. Revisión de ese día: jfpazto/ciudad-de-agentes es privado y main va 35 commits por delante de origin; no hay README ni LICENSE; package.json tiene private: true. data/ ya está ignorado y los fixtures de test están anonimizados. Revisión 2026-10-24: sin LICENSE ni engines; README es borrador y no menciona subagentes, avería/contexto, banderines ni Rebobinar. Datos personales (ruta de la carpeta personal y nombre del autor en PROGRESS.md, feature_list.json, DESIGN.md y 8 specs): sustituidos por «el autor» y «<carpeta del repo>» el mismo día; el historial de git aún los contiene. Las 5 capturas usan datos de demo (project-buildings.png está desfasada). Solo macOS: openSession.ts (open, osascript, claude:// y codex://), trash.ts (~/.Trash) y scripts/autostart.sh (launchctl). La rama de trabajo va 43 commits por delante de origin/main. Carpeta vacía «node_modules 2» (duplicado de iCloud) sin seguimiento. Pendiente: probar en Linux y Windows reales; decidir historial (recomendado repo nuevo con un commit); fusionar la rama; captura nueva para el README; crear el repo público solo con el visto bueno del autor."
+  },
+  {
+    "id": "hardening-and-alerts",
+    "area": "collector",
+    "title": "Endurecer el colector, sonido opcional e instalador sin settings.json y coste de subagentes y lectura incremental de Codex",
+    "user_visible_behavior": "Una web abierta no puede falsear estados ni otro servidor local abrir o borrar sesiones; data/events guarda solo metadatos con retención de 7 días; un botón «Sonido» toca una campanilla en rojo y al responder; hooks:install funciona sin settings.json; un rojo sin eventos en 48 h se duerme. El panel de cada sesión de Claude suma los tokens y el coste de sus subagentes.",
+    "depends_on": [
+      "hook-event-probe",
+      "urgent-notification",
+      "idle-timeout"
+    ],
+    "status": "passing",
+    "verification": [
+      "/hook y /usage/claude: 403 con Origin, 415 sin application/json",
+      "Origin de /open, /new, /delete, /reviewed y WS solo desde los puertos 5173, el del colector o CIUDAD_WEB_PORTS",
+      "data/events sin prompts ni tool_input y sin archivos de más de 7 días",
+      "Botón Sonido persistente y campanilla en rojo y al responder",
+      "hooks:install con settings.json ausente",
+      "te_necesita sin eventos en 48 h pasa a dormida",
+      "Tokens y coste de la sesión incluyen <id>/subagents/*.jsonl",
+      "Los rollouts de Codex se leen solo por los bytes nuevos, con el mismo resultado que leyéndolos enteros"
+    ],
+    "evidence": [
+      "2026-10-22: ./init.sh en verde, 219/219 tests (nuevos en hook.test, ws.test, event-log.test, hooks-install.test, idle.test y web/sound.test). Antes hizo falta npm ci: node_modules/picomatch estaba corrupto y vitest no arrancaba.",
+      "Navegador demo=6&projects=3: botón «Sonido: no» → «Sonido: sí», guardado en localStorage, consola sin errores.",
+      "hooks:install/uninstall con CLAUDE_SETTINGS_PATH en carpeta vacía: crea el archivo y luego lo deja con hooks vacíos.",
+      "Colector real reiniciado (launchctl kickstart): /hook con Origin 403, con text/plain 415, /open desde localhost:3000 403, hook válido 204 y data/events guarda solo metadatos con `omitted: [\"prompt\"]`. Pendiente: validación independiente.",
+      "2026-10-22: 220/220 tests (nuevo «subagentes» en transcript.test; coldstart ahora suma el subagente). Colector real: la sesión de9a9ec3 pasa de 43,8k a 90,9k tokens de salida al sumar sus subagentes; /sessions coincide con readSession.",
+      "2026-10-22: 221/221 tests (nuevo createRolloutParser incremental en codex.test). Colector real: las 11 sesiones de Codex (estado, tokens, herramientas) idénticas antes y después del cambio.",
+      "2026-10-22: la barra superior solo se redibuja si cambian contadores, tokens o ancho (StatusBar.signature). Navegador demo=24&projects=4: contadores y tokens visibles, consola sin errores."
+    ],
+    "notes": "Hecho en la sesión 055 a partir de docs/analisis/brechas.md."
+  },
+  {
+    "id": "facade-scenery",
+    "area": "front",
+    "title": "Decorado vivo de la vista frontal",
+    "user_visible_behavior": "Sol, nubes, skyline, árboles, farolas, peatones y coches alrededor del edificio; solo se mueven con «Vida: sí».",
+    "depends_on": [
+      "tower-render-floors"
+    ],
+    "status": "passing",
+    "verification": [
+      "Decorado determinista visible y en movimiento con Vida: sí"
+    ],
+    "evidence": [
+      "Sesión 039: scenery.test.ts (3); navegador ?demo=6&projects=2."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "open-session-desktop",
+    "area": "collector",
+    "title": "▶ abre la sesión en la app de Claude o Codex",
+    "user_visible_behavior": "Cada piso tiene ▶: abre la sesión en la app de escritorio de su proveedor y, si falla, en Terminal con --resume.",
+    "depends_on": [
+      "open-session-link",
+      "codex-sessions"
+    ],
+    "status": "passing",
+    "verification": [
+      "POST /sessions/:id/open exige Origin local, sesión conocida e id válido",
+      "Abre la app y cae a Terminal si no puede"
+    ],
+    "evidence": [
+      "Sesiones 040, 042 y 044: tests de openSession; POST /open real devuelve openedIn: desktop en Claude y Codex; confirmado por el autor en Codex."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "recency-order",
+    "area": "front",
+    "title": "Edificios y pisos por actividad reciente",
+    "user_visible_behavior": "Los edificios del barrio y los pisos de cada edificio se ordenan por la última actividad, sin huecos y con un único «EN VENTA» arriba.",
+    "depends_on": [
+      "city-neighborhood-map"
+    ],
+    "status": "passing",
+    "verification": [
+      "Orden de edificios igual a la última actividad de /sessions",
+      "Pisos contiguos, el más reciente arriba"
+    ],
+    "evidence": [
+      "Sesiones 041, 048 y 052: tests en world y city; datos reales de FrontAgentico en el mismo orden que /sessions."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "claude-cold-start-days",
+    "area": "collector",
+    "title": "Claude carga 2 días al arrancar",
+    "user_visible_behavior": "Al arrancar, el colector muestra dormidas las sesiones de Claude con actividad en los últimos 2 días (CIUDAD_CLAUDE_DAYS).",
+    "depends_on": [
+      "cold-start-rebuild"
+    ],
+    "status": "passing",
+    "verification": [
+      "CIUDAD_CLAUDE_DAYS respetado"
+    ],
+    "evidence": [
+      "Sesión 045: 179/179; 12 proyectos Claude tras reiniciar."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "roof-flags-smoke",
+    "area": "front",
+    "title": "Banderas de estado y humo en el rótulo",
+    "user_visible_behavior": "El rótulo de cada edificio muestra una bandera por estado con su número y humo cuando alguna sesión ya respondió; aviso al terminar.",
+    "depends_on": [
+      "city-neighborhood-map",
+      "urgent-notification"
+    ],
+    "status": "passing",
+    "verification": [
+      "Banderas y leyenda en el mapa",
+      "Humo y aviso cuando una sesión pasa a para_revisar"
+    ],
+    "evidence": [
+      "Sesiones 046 y 047: roof-flags.test, finished.test; navegador demo. El aviso real al terminar quedó por confirmar por el autor."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "click-outside-back",
+    "area": "front",
+    "title": "Clic fuera del edificio vuelve al mapa",
+    "user_visible_behavior": "Un clic sin arrastre fuera de la fachada vuelve al mapa conservando el encuadre.",
+    "depends_on": [
+      "city-neighborhood-map"
+    ],
+    "status": "passing",
+    "verification": [
+      "Clic en el cielo vuelve; clic en el lateral no"
+    ],
+    "evidence": [
+      "Sesión 049: on-building.test; navegador."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "new-and-delete-session",
+    "area": "collector",
+    "title": "Sesión nueva y eliminar desde la fachada",
+    "user_visible_behavior": "«EN VENTA» abre una sesión nueva en la carpeta del proyecto; deslizar un piso dormido o amarillo y confirmar manda su transcript a la Papelera.",
+    "depends_on": [
+      "open-session-desktop",
+      "project-buildings"
+    ],
+    "status": "passing",
+    "verification": [
+      "/new y /delete exigen Origin local",
+      "No se elimina una sesión activa (409)"
+    ],
+    "evidence": [
+      "Sesión 053: new-delete.test (5), floor-actions.test (2); colector real 403 sin Origin; confirmado por el autor."
+    ],
+    "notes": "Registrada a posteriori en la sesión 055 a partir de PROGRESS.md; pendiente de validación independiente."
+  },
+  {
+    "id": "subagent-helpers",
+    "area": "web",
+    "title": "Subagentes visibles en el piso",
+    "user_visible_behavior": "Cada subagente de Claude trabajando aparece como un ayudante pequeño (camiseta morada) junto al personaje del piso, hasta 3 y «+N»; el panel muestra «Subagentes: N trabajando · M en total».",
+    "depends_on": [
+      "transcript-token-parser",
+      "tower-render-floors",
+      "detail-panel-metrics"
+    ],
+    "status": "passing",
+    "verification": [
+      "Activos por agent_id de los hooks; SubagentStop los cierra; dormir los pone a 0",
+      "Total = transcripts en <id>/subagents/",
+      "Demo ?demo=12 muestra ayudantes y la fila del panel"
+    ],
+    "evidence": [
+      "Sesión 057: ./init.sh 230/230 (sessions.test +2, transcript.test, panel.test). Navegador demo: 3 ayudantes y «3 trabajando · 5 en total», consola limpia. Colector real: 5 sesiones reales con total (p. ej. 6); hooks de prueba dan 2 → 1 activos y SessionEnd la retira."
+    ],
+    "notes": "Solo Claude: Codex no informa de subagentes (queda «—»). Pendiente de validación independiente."
+  },
+  {
+    "id": "floor-failure-context",
+    "area": "web",
+    "title": "Avería y contexto por piso",
+    "user_visible_behavior": "Si la última respuesta de una sesión de Claude fue un error de la API, su piso muestra el cartel «AVERÍA · límite de uso | sesión caducada | error de la API» hasta la siguiente respuesta buena. Bajo la placa, una barra con el % de contexto usado: gris, ámbar desde el 70 % y naranja con «!» desde el 85 %. El panel añade las filas «Contexto» y «Avería».",
+    "depends_on": [
+      "transcript-token-parser",
+      "tower-render-floors",
+      "detail-panel-metrics",
+      "usage-limits"
+    ],
+    "status": "passing",
+    "verification": [
+      "Avería: mensajes isApiErrorMessage de la conversación principal (no subagentes); la siguiente respuesta buena la quita",
+      "Contexto: context_window.used_percentage y session_id de la statusline (Claude Code 2.1.309)",
+      "Demo ?demo=12: avería en Portafolio y barras al 35/72/91 %"
+    ],
+    "evidence": [
+      "Sesión 057: ./init.sh 237/237 (transcript +2, sessions +2, usage +1, panel +2). Navegador demo: cartel de avería, barras legibles sobre cualquier estado, panel «91 % usado» y «límite de uso (hace 11 s)», consola limpia."
+    ],
+    "notes": "No es un estado nuevo: el chip sigue mostrando el estado y la avería es una marca aparte (el rojo queda solo para «te necesita»). El contexto solo existe para sesiones abiertas con la statusline de la Ciudad; Codex no tiene ninguno de los dos. Pendiente de validación independiente."
+  },
+  {
+    "id": "city-replay",
+    "area": "web",
+    "title": "Rebobinar un día",
+    "user_visible_behavior": "Botón «Rebobinar»: elige un día de los últimos 7 y recorre con un deslizador (o «Reproducir», un día en ~30 s) cómo estaban los pisos de Claude cada 5 minutos: colores, humo, cartel ✓ y banderas. Sin avisos ni acciones mientras se mira el pasado; «Volver al directo» recupera la ciudad en vivo.",
+    "depends_on": [
+      "session-state-machine",
+      "hardening-and-alerts",
+      "city-neighborhood-map"
+    ],
+    "status": "passing",
+    "verification": [
+      "GET /history reconstruye con el mismo reduce e inactividad; un turno corto no se pierde entre fotogramas",
+      "CORS solo a orígenes locales (403 a otros); día inválido o futuro 400",
+      "Abrir, crear, eliminar y marcar revisado bloqueados en el pasado"
+    ],
+    "evidence": [
+      "Sesión 057: ./init.sh 245/245 (history.test 5, replay.test 2). Día real 2026-10-23: 1.970 eventos → 289 fotogramas, 86 KB, 8 ms; máx. 4 trabajando a las 19:35. Navegador real: deslizador, Reproducir (19:35 → 21:15 en 2 s) y vuelta al directo con las 44 sesiones vivas."
+    ],
+    "notes": "Solo Claude: Codex no deja eventos (sondeo de rollouts), su barrio sale vacío al rebobinar. Sin métricas del pasado (tokens 0 en la barra). Pendiente de validación independiente."
+  }
+]

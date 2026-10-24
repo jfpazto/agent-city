@@ -1,0 +1,10 @@
+{
+  "name": "@ciudad/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": { "@ciudad/shared": "*", "pixi.js": "^8.6.0" }
+}

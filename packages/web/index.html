@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ciudad de agentes</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #7fb2e5; }
+      canvas { display: block; image-rendering: pixelated; }
+      /* Buscador de pisos, encima de la barra de estado (32 px, fondo panelBg). */
+      .search { position: fixed; top: 4px; right: 8px; display: flex; align-items: center; gap: 6px;
+        font: 11px "JetBrains Mono", ui-monospace, monospace; color: #e6e8ef; }
+      .search input { width: 170px; height: 22px; box-sizing: border-box; padding: 0 6px; border: 1px solid #4a5068;
+        background: #1e2230; color: #e6e8ef; font: inherit; border-radius: 0; outline: none; }
+      .search input:focus { border-color: #8b7cf6; }
+      .search input::placeholder { color: #9aa0b4; }
+      .search output { min-width: 64px; text-align: right; }
+      .search button, .panel button { height: 22px; padding: 0 8px; border: 1px solid #4a5068; background: #1e2230;
+        color: #e6e8ef; font: inherit; cursor: pointer; border-radius: 0; }
+      .search button:disabled { cursor: default; color: #9aa0b4; }
+      .search button:focus-visible, .panel button:focus-visible { outline: 2px solid #8b7cf6; outline-offset: 1px; }
+      /* Panel de detalle: 360 px a la derecha, bajo la barra; en ventanas estrechas, por encima de la torre. */
+      .panel { position: fixed; top: 32px; right: 0; bottom: 0; width: 360px; max-width: 100vw; box-sizing: border-box;
+        overflow-y: auto; padding: 16px; background: #141826; color: #e6e8ef; border-left: 4px solid #1e2230;
+        font: 12px/1.5 "JetBrains Mono", ui-monospace, monospace; }
+      .panel[hidden] { display: none; }
+      .panel header { display: flex; align-items: flex-start; gap: 8px; }
+      .panel h2 { flex: 1; margin: 0; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; }
+      .panel .state { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 4px; font-weight: bold; }
+      .panel .state::before { content: ""; width: 10px; height: 10px; background: var(--state); }
+      .panel .meta { margin: 0; color: #b8bdcc; }
+      .panel .meta span { color: #e6e8ef; }
+      .panel .cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .panel h3 { margin: 16px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #b8bdcc; }
+      .panel dl { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin: 0; }
+      .panel dt { color: #b8bdcc; } .panel dd { margin: 0; text-align: right; }
+      .panel ul { margin: 0; padding: 0; list-style: none; }
+      .panel li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+      .panel .chart { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; align-items: end; height: 96px; }
+      .panel .bar { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 2px; }
+      .panel .bar i { display: block; width: 100%; min-height: 2px; background: #8b7cf6; }
+      .panel .bar.today i { background: #3ddc84; }
+      .panel .bar span { color: #b8bdcc; font-size: 10px; }
+      .panel .replies { display: flex; flex-wrap: wrap; gap: 6px; }
+      .panel .replies button, .panel .open { height: auto; min-height: 24px; padding: 2px 8px; text-align: left; }
+      .panel textarea { width: 100%; box-sizing: border-box; min-height: 48px; margin-top: 6px; padding: 4px 6px; resize: vertical;
+        border: 1px solid #4a5068; background: #1e2230; color: #e6e8ef; font: inherit; border-radius: 0; }
+      .panel textarea:focus { outline: 2px solid #8b7cf6; outline-offset: 1px; }
+      .panel .row { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+      .panel .toast { color: #3ddc84; min-height: 18px; margin: 6px 0 0; }
+      .panel ol { margin: 0; padding: 0; list-style: none; }
+      .panel ol li { direction: ltr; white-space: normal; }
+      /* En ventanas estrechas, los controles tienen su propia fila para no tapar los contadores. */
+      @media (max-width: 1100px) {
+        .search { top: 32px; left: 0; right: 0; height: 32px; padding: 0 8px; background: #141826; justify-content: flex-end; }
+        .panel { top: 64px; }
+      }
+      .city-nav {position:fixed;top:36px;left:8px;right:8px;z-index:10;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px;background:#182235;color:#e8eff6;border-bottom:2px solid #344a60;font:12px/1.4 ui-monospace,monospace;}
+      .city-nav button,.city-nav select,.city-relations button,.city-relations select {font:inherit;color:#e8eff6;background:#27364d;border:1px solid #53657c;border-radius:0;padding:6px 8px;min-height:30px;}
+      .city-nav button {cursor:pointer;}
+      .city-nav button[aria-pressed="true"] {color:#182235;background:#e8eff6;border-color:#e8eff6;}
+      .city-nav button:focus-visible,.city-nav select:focus-visible,.city-relations button:focus-visible,.city-relations select:focus-visible,.roof-label:focus-visible {outline:3px solid #8b7cf6;outline-offset:2px;}
+      .city-nav button:disabled {opacity:.65;cursor:default;}
+      .city-nav select {width:180px;max-width:100%;}
+      #city-context {margin-left:auto;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#becde0;}
+      [hidden] {display:none!important;}
+      #map-labels {position:fixed;inset:0;z-index:5;pointer-events:none;overflow:hidden;}
+      .usage-label {position:absolute;transform:translate(-100%,-50%);margin:0;padding:2px 5px;border:1px solid #8c7a63;background:#f4efe3;color:#213046;font:bold 11px/1.3 ui-monospace,monospace;white-space:nowrap;pointer-events:auto;box-shadow:2px 2px 0 #0002;}
+      .usage-label[data-provider="codex"] {border-color:#5a788d;background:#e3edf1;}
+      .usage-label[data-state="bajo"] {color:#8a5a12;}
+      .usage-label[data-state="agotado"] {color:#b3262b;}
+      .usage-label[data-state="sin_dato"] {color:#6b716e;font-weight:normal;}
+      .sr-only {position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;}
+      .roof-label {position:absolute;transform:translate(-50%,-50%);pointer-events:auto;box-sizing:border-box;padding:5px 7px;border:2px solid #65766c;background:#edeede;color:#213046;box-shadow:3px 3px 0 #0002;text-align:left;font:11px/1.3 ui-monospace,monospace;cursor:pointer;}
+      .roof-label[data-provider="codex"] {background:#e3edf1;border-color:#5a788d;}
+      .roof-label strong {display:block;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+      .roof-label span {display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;}
+      .roof-label span {display:flex;gap:6px;}
+      .roof-flag {position:relative;font-style:normal;font-weight:bold;font-size:12px;padding-left:17px;}
+      .roof-flag::before {content:"";position:absolute;left:1px;top:0;width:2px;height:14px;background:#213046;}
+      .roof-flag::after {content:"";position:absolute;left:3px;top:0;width:11px;height:9px;background:var(--flag);clip-path:polygon(0 0,100% 50%,0 100%);}
+      .roof-flag[data-state="te_necesita"] {--flag:#E5484D;color:#b3262b;}
+      .roof-flag[data-state="te_necesita"]::after {animation:flag-blink 1s steps(2) infinite;}
+      .roof-flag[data-state="trabajando"] {--flag:#3DDC84;color:#1d7a47;}
+      .roof-flag[data-state="para_revisar"] {--flag:#F5C542;color:#8a6a10;}
+      .roof-flag[data-state="dormida"] {--flag:#9aa3ad;color:#5d6670;}
+      #map-legend {position:fixed;left:12px;bottom:34px;z-index:6;display:flex;flex-wrap:wrap;gap:12px;padding:6px 10px;background:#edeedeeb;border:2px solid #65766c;box-shadow:3px 3px 0 #0002;font:11px/1.3 ui-monospace,monospace;color:#213046;max-width:calc(100vw - 48px);}
+      #map-legend .legend-smoke {font-style:normal;}
+      #replay-bar {position:fixed;right:12px;bottom:68px;z-index:7;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 10px;background:#141826;border:2px solid #8B7CF6;box-shadow:3px 3px 0 #0003;font:12px/1.3 ui-monospace,monospace;color:#E6E8EF;max-width:calc(100vw - 48px);}
+      #replay-bar[hidden] {display:none;}
+      #replay-bar input[type=range] {width:min(320px,50vw);accent-color:#8B7CF6;}
+      #replay-time {min-width:7ch;font-weight:bold;font-size:14px;}
+      #map-legend .legend-ready {display:inline-block;width:14px;height:14px;background:#F5C542;border:1px solid #141826;color:#141826;font:bold 10px/13px monospace;text-align:center;}
+      #map-legend .roof-flag {font-size:11px;color:#213046;}
+      #map-labels[hidden] + #map-legend {display:none;}
+      .roof-smoke {display:none;position:absolute;left:50%;bottom:100%;width:40px;height:64px;margin-left:-20px;pointer-events:none;}
+      .roof-label.has-smoke .roof-smoke {display:block;}
+      .roof-smoke i {position:absolute;left:9px;bottom:0;width:16px;height:16px;border-radius:50%;background:#9ea3ab;border:2px solid #4b515c;box-shadow:inset -3px -3px 0 #0002;opacity:0;animation:smoke-rise 2.4s ease-out infinite;}
+      .roof-smoke i:nth-child(2) {animation-delay:.8s;}
+      .roof-smoke i:nth-child(3) {animation-delay:1.6s;}
+      @keyframes smoke-rise {0% {transform:translate(0,0) scale(.5);opacity:0;} 15% {opacity:1;} 70% {opacity:.85;} 100% {transform:translate(10px,-54px) scale(1.7);opacity:0;}}
+      .roof-ready {display:none;position:absolute;left:50%;bottom:100%;margin:0 0 6px 14px;width:22px;height:22px;background:#F5C542;border:2px solid #141826;color:#141826;font:bold 14px/18px monospace;text-align:center;pointer-events:none;animation:ready-bob 1.6s ease-in-out infinite;}
+      .roof-ready::after {content:"";position:absolute;left:7px;top:100%;border:4px solid transparent;border-top-color:#141826;}
+      .roof-label.has-ready .roof-ready {display:block;}
+      @keyframes ready-bob {0%,100% {transform:translateY(0);} 50% {transform:translateY(-5px);}}
+      @media (prefers-reduced-motion: reduce) {.roof-ready {animation:none !important;}}
+      @media (prefers-reduced-motion: reduce) {.roof-smoke i {animation:none !important;opacity:.9;} .roof-smoke i:nth-child(2) {transform:translate(4px,-14px) scale(.9);} .roof-smoke i:nth-child(3) {transform:translate(8px,-28px) scale(1.2);}}
+      @keyframes flag-blink {50% {opacity:.25;}}
+      @media (prefers-reduced-motion: reduce) {.roof-flag::after {animation:none !important;}}
+      .roof-label.is-highlighted {outline:3px solid #8b7cf6;outline-offset:2px;}
+      .roof-label.is-distant {height:28px;padding:6px;}
+      .roof-label.is-distant strong {display:none;}
+      .roof-label.is-distant span {font-size:0;margin:0;}
+      .roof-label.is-distant span::before {width:14px;height:12px;margin:0;}
+      .city-relations {position:fixed;z-index:30;top:130px;left:12px;width:340px;max-width:calc(100vw - 24px);max-height:calc(100vh - 150px);overflow:auto;box-sizing:border-box;padding:16px;background:#182235;color:#e8eff6;border:2px solid #53657c;box-shadow:7px 7px 0 #0003;font:12px/1.5 ui-monospace,monospace;}
+      .city-relations header {display:flex;justify-content:space-between;align-items:center;gap:10px;}
+      .city-relations h2 {font-size:15px;margin:0;}
+      .city-relations h3 {font-size:12px;margin:18px 0 8px;}
+      .city-relations p {color:#c4d2e4;}
+      .city-relations label {display:block;margin:8px 0;}
+      .city-relations select {display:block;width:100%;margin-top:4px;}
+      .city-relations ul {padding:0;list-style:none;}
+      .city-relations li {display:flex;align-items:center;gap:8px;justify-content:space-between;margin:8px 0;}
+      .city-relations li span {overflow-wrap:anywhere;}
+      #city-announcement {position:fixed;left:12px;bottom:7px;right:180px;z-index:8;pointer-events:none;margin:0;color:#c4d2e4;font:11px/1.4 ui-monospace,monospace;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+      .panel {z-index:20;}
+      @media(max-width:1100px) {.city-nav {top:68px;}}
+      @media(max-width:600px) {.city-nav {gap:5px;padding:6px;}.city-nav button {min-height:34px;}#city-context {display:none;}.city-nav select {width:158px;}.city-relations {max-height:calc(100vh - 210px);}}
+    </style>
+  </head>
+  <body>
+    <label class="search">
+      <button id="notify" type="button" hidden title="Aviso del sistema cuando un piso lleva más de 1 min en rojo"></button>
+      <output id="search-result" aria-live="polite"></output>
+      <input id="search" type="search" placeholder="Proyecto o sesión  /" aria-label="Buscar por proyecto o título de sesión" autocomplete="off" />
+      <button id="search-open" type="button" hidden>Abrir</button>
+    </label>
+    <nav id="city-nav" class="city-nav" aria-label="Navegación de la ciudad">
+      <button type="button" data-district="all" aria-pressed="true">Toda la ciudad</button>
+      <button type="button" data-district="claude" aria-pressed="false">Claude</button>
+      <button type="button" data-district="codex" aria-pressed="false">Codex</button>
+      <button type="button" id="back-map" hidden>← Volver al mapa</button>
+      <select id="city-picker" aria-label="Entrar a un proyecto"><option value="">Ir a un proyecto…</option></select>
+      <select id="floor-picker" aria-label="Abrir una sesión del edificio" hidden><option value="">Abrir una sesión…</option></select>
+      <button type="button" id="city-zoom-out" aria-label="Alejar">−</button>
+      <button type="button" id="city-zoom-in" aria-label="Acercar">+</button>
+      <button type="button" id="bridges-open" aria-expanded="false" aria-controls="city-relations">Puentes (0)</button>
+      <button type="button" id="city-motion" aria-pressed="true">Vida: sí</button>
+      <button type="button" id="city-sound" aria-pressed="false" title="Campanilla cuando un piso pasa a rojo o una sesión ya respondió">Sonido: no</button>
+      <button type="button" id="city-replay" aria-pressed="false" title="Ver cómo cambió la ciudad a lo largo de un día (solo Claude)">Rebobinar</button>
+      <span id="city-context">Vista superior</span>
+    </nav>
+    <div id="map-labels" aria-label="Edificios del mapa"></div>
+    <div id="map-legend" aria-label="Leyenda de banderas"><i class="roof-flag" data-state="trabajando">Trabajando</i><i class="roof-flag" data-state="para_revisar">Finalizada</i><i class="roof-flag" data-state="te_necesita">Requiere aprobación</i><i class="roof-flag" data-state="dormida">Dormida</i><i class="legend-smoke">💨 Trabajando ahora</i><i class="legend-smoke"><b class="legend-ready">✓</b> Lista para revisar</i></div>
+    <div id="replay-bar" role="group" aria-label="Rebobinar el día" hidden>
+      <select id="replay-day" aria-label="Día"></select>
+      <button type="button" id="replay-play">▶ Reproducir</button>
+      <input type="range" id="replay-range" min="0" max="0" step="1" value="0" aria-label="Hora del día">
+      <output id="replay-time" aria-live="polite">--:--</output>
+      <button type="button" id="replay-exit">Volver al directo</button>
+    </div>
+    <aside id="city-relations" class="city-relations" role="dialog" aria-modal="false" aria-labelledby="bridges-title" hidden>
+      <header><h2 id="bridges-title">Puentes entre proyectos</h2><button type="button" id="bridges-close" aria-label="Cerrar puentes">✕</button></header>
+      <p>Un puente representa una relación; no envía mensajes entre sesiones.</p>
+      <h3>Mismo proyecto en ambos barrios</h3><p id="automatic-bridges"></p>
+      <h3>Relacionar dos proyectos</h3>
+      <form id="bridge-form"><label>Desde<select id="bridge-from" required></select></label><label>Hasta<select id="bridge-to" required></select></label><button type="submit">Crear puente</button></form>
+      <ul id="manual-bridges"></ul><p id="manual-bridges-empty">Aún no has relacionado proyectos.</p>
+      <p>Las relaciones se guardan en este navegador.</p>
+    </aside>
+    <p id="city-announcement" role="status" aria-live="polite"></p>
+    <aside id="panel" class="panel" role="dialog" aria-modal="false" aria-labelledby="panel-title" hidden>
+      <header>
+        <h2 id="panel-title"></h2>
+        <button id="panel-close" type="button" aria-label="Cerrar panel (Esc)">✕</button>
+      </header>
+      <p id="panel-state" class="state"></p>
+      <p class="meta cwd">Proyecto / agente: <span id="panel-project"></span></p>
+      <p class="meta">Modelo: <span id="panel-model"></span></p>
+      <p class="meta">Última actividad: <span id="panel-activity"></span></p>
+      <p class="meta cwd">Carpeta: <span id="panel-cwd"></span></p>
+      <h3>Esta sesión</h3>
+      <dl id="panel-rows"></dl>
+      <h3>Archivos editados</h3>
+      <ul id="panel-files"></ul>
+      <p id="panel-files-empty" class="meta">Ninguno todavía.</p>
+      <h3 id="panel-chart-title">Tokens por día (7 días)</h3>
+      <div id="panel-chart" class="chart" role="img" aria-labelledby="panel-chart-title"></div>
+      <h3>Respuestas rápidas</h3>
+      <p class="meta">Se copian al portapapeles; pégalas tú en la sesión. No se envía nada.</p>
+      <div id="panel-replies" class="replies"></div>
+      <label class="meta" for="panel-reply">Otra respuesta</label>
+      <textarea id="panel-reply" rows="2" placeholder="Escribe y pulsa Copiar"></textarea>
+      <div class="row"><button id="panel-reply-copy" type="button">Copiar</button></div>
+      <h3>Sesión</h3>
+      <button id="panel-open" class="open" type="button">Abrir sesión</button>
+      <p class="meta">La app no permite abrir una sesión concreta desde fuera: se copian su título y su carpeta para buscarla.</p>
+      <p id="panel-toast" class="toast" role="status" aria-live="polite"></p>
+      <h3>Bitácora</h3>
+      <ol id="panel-log"></ol>
+      <p id="panel-log-empty" class="meta">Sin acciones todavía.</p>
+    </aside>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
