@@ -526,3 +526,5 @@
 
 - Reemplazadas mapa, fachada y panel desde la demo con nombres ficticios; README y nombres de proyectos demo alineados. Guía manual §29.
 - Verificación visual de las tres capturas y consola sin errores en el repo de origen; ./init.sh: typecheck y 257/257 tests.
+
+- Corrección de visualización del README: rutas nuevas `*-demo-20261024.png` para evitar reutilizar las URLs de las capturas antiguas. El blob de mapa publicado en origin/main coincide con la captura nueva local.
