@@ -25,7 +25,13 @@ export type CodexRollout = {
   subagent: boolean;
   /** Último `rate_limits` del rollout (límite de uso de la cuenta), si lo trae. */
   limits?: UsageLimits;
+  /** Contexto usado (0-100): entrada de la última petición / `model_context_window`. */
+  contextPercent?: number;
+  /** Turnos [inicio, fin] en ms; fin null si sigue abierto. Para Rebobinar. Máx. TURNS_MAX, los más recientes. */
+  turns: [number, number | null][];
 };
+
+export const TURNS_MAX = 500;
 
 const localDay = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -44,6 +50,8 @@ export function createRolloutParser(fileId?: string): RolloutParser {
   const log: LogEntry[] = [];
   const byDay: Record<string, number> = {};
   let limits: UsageLimits | undefined;
+  let contextPercent: number | undefined;
+  const turns: [number, number | null][] = [];
   const push = (at: string, label: string) => {
     const prev = log[log.length - 1];
     if (prev && prev.label === label) {
@@ -77,9 +85,15 @@ export function createRolloutParser(fileId?: string): RolloutParser {
         else if (p.type === "task_started") {
           working = true;
           push(at, "Turno");
+          if (Number.isFinite(t)) {
+            turns.push([t, null]);
+            if (turns.length > TURNS_MAX) turns.shift();
+          }
         } else if (p.type === "task_complete" || p.type === "turn_aborted") {
           working = false;
           finished = true;
+          const open = turns[turns.length - 1];
+          if (open && open[1] === null && Number.isFinite(t)) open[1] = t;
         } else if (p.type === "token_count") {
           if (at) limits = codexLimits(p.rate_limits, at) ?? limits;
           if (!p.info?.total_token_usage) continue;
@@ -92,6 +106,8 @@ export function createRolloutParser(fileId?: string): RolloutParser {
             cacheCreation: Number(u.cache_write_input_tokens) || 0,
           };
           const lastUse = p.info.last_token_usage;
+          const window = Number(p.info.model_context_window);
+          if (lastUse && window > 0) contextPercent = Math.max(0, Math.min(100, Math.round(((Number(lastUse.input_tokens) || 0) / window) * 100)));
           if (lastUse && Number.isFinite(t)) {
             const day = localDay(new Date(t));
             byDay[day] = (byDay[day] ?? 0) + (Number(lastUse.total_tokens) || 0);
@@ -122,6 +138,8 @@ export function createRolloutParser(fileId?: string): RolloutParser {
       byDay: { ...byDay },
       subagent,
       limits,
+      contextPercent,
+      turns: turns.map(([a, b]) => [a, b]),
     };
   };
 

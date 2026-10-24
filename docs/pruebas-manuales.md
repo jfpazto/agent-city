@@ -279,7 +279,7 @@ Sustituyen a las pasarelas del apartado 14: donde allí se habla de pasarelas, a
 ## 28. Rebobinar un día (2026-10-24)
 
 1. Con el colector arrancado, abre `http://localhost:5173` y pulsa «Rebobinar». Abajo a la derecha aparece una barra con el día («Hoy»), «▶ Reproducir», un deslizador, la hora y «Volver al directo». Empieza en el primer momento del día con alguna sesión activa.
-2. Elige «Ayer» y mueve el deslizador: los edificios de Claude aparecen, cambian de bandera, echan humo o muestran el cartel ✓ según la hora. El barrio Codex sale vacío (Codex no guarda eventos) y la barra superior dice «tokens 0».
+2. Elige «Ayer» y mueve el deslizador: los edificios de Claude aparecen, cambian de bandera, echan humo o muestran el cartel ✓ según la hora. El barrio Codex también se mueve (desde el 2026-10-24): sus sesiones aparecen cuando empezó su primer turno, trabajando si tenían un turno abierto en ese momento, luego para revisar y, pasada la inactividad, dormidas. La barra superior dice «tokens 0».
 3. «▶ Reproducir» recorre el día (unos 30 s el día entero); «⏸ Pausa» lo detiene. Mover el deslizador también lo detiene.
 4. Mientras rebobinas no hay avioneta, sonido ni avisos, y abrir, crear o eliminar sesiones avisa de que estás viendo el pasado. Abrir el panel de un piso amarillo no lo marca como revisado.
 5. «Volver al directo» (o «Rebobinar» otra vez) devuelve la ciudad en vivo con todas sus sesiones.
@@ -294,6 +294,12 @@ Sustituyen a las pasarelas del apartado 14: donde allí se habla de pasarelas, a
 4. macOS sin cambios: `npm run autostart:status` dice «launchd: cargado» y el colector responde.
 5. Linux (pendiente de probar en una máquina real): `npm run autostart:install` crea `~/.config/systemd/user/ciudad-de-agentes.service`; eliminar una sesión la deja en la papelera del escritorio, restaurable; abrir una sesión usa `xdg-open` o la primera terminal disponible.
 6. Windows (pendiente de probar en una máquina real): `npm run hooks:install` usa `node "…send.mjs"`; `npm run autostart:install` deja `ciudad-de-agentes.vbs` en la carpeta Inicio; eliminar una sesión la manda a la Papelera de reciclaje.
+
+## 30. Codex: contexto y Rebobinar sin hooks (2026-10-24)
+
+1. Con el colector reiniciado, `curl -s 127.0.0.1:4317/sessions` muestra `contextPercent` en las sesiones de Codex (entrada de la última petición sobre `model_context_window`).
+2. Entra en un edificio de Codex: cada piso lleva la barra de contexto bajo la placa (gris, ámbar desde el 70 %, naranja desde el 85 %), también si la sesión es de la app de escritorio de Codex.
+3. Rebobinar «Hoy» o «Ayer»: los edificios de Codex aparecen y echan humo en las horas en que tuvieron turnos.
 
 ## Desinstalar todo
 

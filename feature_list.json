@@ -544,7 +544,7 @@
       "2026-10-23: colector real reiniciado; send.sh codex → línea {agent:'codex'} en el log y la sesión no aparece en /sessions. Colector apagado (puerto 4399): send.sh sale en 0,01 s con exit 0.",
       "Falta: sesión real de Codex. Codex exige aprobar los hooks en su TUI (trusted_hash en config.toml); sin aprobarlos, codex exec no los ejecuta. Hooks ya instalados en ~/.codex/hooks.json."
     ],
-    "notes": "Hipótesis desde el binario 0.163.0: mismos eventos y campos que Claude, más PostCompact, SubagentStart e Interrupt. La sonda la confirma o la corrige. Sigue not_started hasta la sesión real: Codex exige aprobar los hooks (ver docs/technical-discovery.md)."
+    "notes": "Hipótesis desde el binario 0.163.0: mismos eventos y campos que Claude, más PostCompact, SubagentStart e Interrupt. La sonda la confirma o la corrige. Sigue not_started hasta la sesión real: Codex exige aprobar los hooks (ver docs/technical-discovery.md). Investigación 2026-10-24 (Codex 0.163.0): la función `hooks` está activada (stable, true); el bloqueo es la aprobación guardada de cada hook (`trusted_hash`), que no llegó a persistir. `codex exec --dangerously-bypass-hook-trust` la salta para una ejecución (no probado: el clasificador de permisos de Claude Code bloquea ese indicador). Las 68 sesiones recientes usan approval_policy=never con danger-full-access: Codex nunca pide permiso, así que «te necesita» no aplicaría a este uso. Sin hooks se puede: coste (token_count en rollouts; modelos gpt-6.1-sol y gpt-6-astra, falta tabla oficial de precios), % de contexto (last_token_usage.input_tokens / model_context_window, que viene en token_count) y Rebobinar (task_started/task_complete con su hora)."
   },
   {
     "id": "codex-sessions",
@@ -643,9 +643,10 @@
       "Repo público en GitHub solo con el visto bueno del autor"
     ],
     "evidence": [
-      "Sesión 057: datos personales sustituidos en docs; LICENSE MIT y engines (^22.12 || ^24 || >=26, lo que pide vitest); README al día. Clon limpio en carpeta temporal: npm install y ./init.sh en verde, colector y front con carpetas vacías sin errores, una sesión de prueba crea su edificio, instalador de hooks probado con CLAUDE_SETTINGS_PATH temporal. Soporte Linux/Windows (abrir sesiones, papelera, hooks en Node, arranque automático con systemd o carpeta Inicio) con platforms.test (8); ./init.sh 253/253. macOS real sin cambios (autostart:status, colector 45 sesiones)."
+      "Sesión 057: datos personales sustituidos en docs; LICENSE MIT y engines (^22.12 || ^24 || >=26, lo que pide vitest); README al día. Clon limpio en carpeta temporal: npm install y ./init.sh en verde, colector y front con carpetas vacías sin errores, una sesión de prueba crea su edificio, instalador de hooks probado con CLAUDE_SETTINGS_PATH temporal. Soporte Linux/Windows (abrir sesiones, papelera, hooks en Node, arranque automático con systemd o carpeta Inicio) con platforms.test (8); ./init.sh 253/253. macOS real sin cambios (autostart:status, colector 45 sesiones).",
+      "2026-10-24: publicado https://github.com/jfpazto/agent-city (público, MIT, un commit de Jonathan Paez con correo noreply). Clonado desde GitHub: npm install y ./init.sh 253/253."
     ],
-    "notes": "Pedida por el usuario el 2026-10-21 y aplazada. Revisión de ese día: jfpazto/ciudad-de-agentes es privado y main va 35 commits por delante de origin; no hay README ni LICENSE; package.json tiene private: true. data/ ya está ignorado y los fixtures de test están anonimizados. Revisión 2026-10-24: sin LICENSE ni engines; README es borrador y no menciona subagentes, avería/contexto, banderines ni Rebobinar. Datos personales (ruta de la carpeta personal y nombre del autor en PROGRESS.md, feature_list.json, DESIGN.md y 8 specs): sustituidos por «el autor» y «<carpeta del repo>» el mismo día; el historial de git aún los contiene. Las 5 capturas usan datos de demo (project-buildings.png está desfasada). Solo macOS: openSession.ts (open, osascript, claude:// y codex://), trash.ts (~/.Trash) y scripts/autostart.sh (launchctl). La rama de trabajo va 43 commits por delante de origin/main. Carpeta vacía «node_modules 2» (duplicado de iCloud) sin seguimiento. Pendiente: probar en Linux y Windows reales; decidir historial (recomendado repo nuevo con un commit); fusionar la rama; captura nueva para el README; crear el repo público solo con el visto bueno del autor."
+    "notes": "Pedida por el usuario el 2026-10-21 y aplazada. Revisión de ese día: jfpazto/ciudad-de-agentes es privado y main va 35 commits por delante de origin; no hay README ni LICENSE; package.json tiene private: true. data/ ya está ignorado y los fixtures de test están anonimizados. Revisión 2026-10-24: sin LICENSE ni engines; README es borrador y no menciona subagentes, avería/contexto, banderines ni Rebobinar. Datos personales (ruta de la carpeta personal y nombre del autor en PROGRESS.md, feature_list.json, DESIGN.md y 8 specs): sustituidos por «el autor» y «<carpeta del repo>» el mismo día; el historial de git aún los contiene. Las 5 capturas usan datos de demo (project-buildings.png está desfasada). Solo macOS: openSession.ts (open, osascript, claude:// y codex://), trash.ts (~/.Trash) y scripts/autostart.sh (launchctl). La rama de trabajo va 43 commits por delante de origin/main. Carpeta vacía «node_modules 2» (duplicado de iCloud) sin seguimiento. Pendiente: probar en Linux y Windows reales; captura nueva para el README; los cambios futuros hay que llevarlos también a agent-city (es un repo aparte, sin historial común)."
   },
   {
     "id": "hardening-and-alerts",
@@ -844,9 +845,10 @@
       "Demo ?demo=12: avería en Portafolio y barras al 35/72/91 %"
     ],
     "evidence": [
-      "Sesión 057: ./init.sh 237/237 (transcript +2, sessions +2, usage +1, panel +2). Navegador demo: cartel de avería, barras legibles sobre cualquier estado, panel «91 % usado» y «límite de uso (hace 11 s)», consola limpia."
+      "Sesión 057: ./init.sh 237/237 (transcript +2, sessions +2, usage +1, panel +2). Navegador demo: cartel de avería, barras legibles sobre cualquier estado, panel «91 % usado» y «límite de uso (hace 11 s)», consola limpia.",
+      "2026-10-24: 11/11 sesiones reales de Codex con contexto (4–68 %); piso de Codex con la barra al 68 % en el navegador."
     ],
-    "notes": "No es un estado nuevo: el chip sigue mostrando el estado y la avería es una marca aparte (el rojo queda solo para «te necesita»). El contexto solo existe para sesiones abiertas con la statusline de la Ciudad; Codex no tiene ninguno de los dos. Pendiente de validación independiente."
+    "notes": "No es un estado nuevo: el chip sigue mostrando el estado y la avería es una marca aparte (el rojo queda solo para «te necesita»). El contexto solo existe para sesiones abiertas con la statusline de la Ciudad; Codex: el % de contexto sale de sus rollouts (last_token_usage.input_tokens / model_context_window) desde el 2026-10-24, también en la app de escritorio; avería no. Pendiente de validación independiente."
   },
   {
     "id": "city-replay",
@@ -865,8 +867,9 @@
       "Abrir, crear, eliminar y marcar revisado bloqueados en el pasado"
     ],
     "evidence": [
-      "Sesión 057: ./init.sh 245/245 (history.test 5, replay.test 2). Día real 2026-10-23: 1.970 eventos → 289 fotogramas, 86 KB, 8 ms; máx. 4 trabajando a las 19:35. Navegador real: deslizador, Reproducir (19:35 → 21:15 en 2 s) y vuelta al directo con las 44 sesiones vivas."
+      "Sesión 057: ./init.sh 245/245 (history.test 5, replay.test 2). Día real 2026-10-23: 1.970 eventos → 289 fotogramas, 86 KB, 8 ms; máx. 4 trabajando a las 19:35. Navegador real: deslizador, Reproducir (19:35 → 21:15 en 2 s) y vuelta al directo con las 44 sesiones vivas.",
+      "2026-10-24: Codex en Rebobinar con datos reales: 11 sesiones del día, mi-x20 trabajando a las 10:20 con humo; codex-replay.test (4); ./init.sh 257/257."
     ],
-    "notes": "Solo Claude: Codex no deja eventos (sondeo de rollouts), su barrio sale vacío al rebobinar. Sin métricas del pasado (tokens 0 en la barra). Pendiente de validación independiente."
+    "notes": "Codex añadido el 2026-10-24 desde los turnos de sus rollouts (codexFrame). Sin métricas del pasado (tokens 0 en la barra). Pendiente de validación independiente."
   }
 ]

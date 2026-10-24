@@ -66,13 +66,14 @@ export type UsageLimits = { provider: AgentProvider; fiveHour?: UsageWindow; wee
 
 /**
  * Día rebobinado (GET /history?day=AAAA-MM-DD): datos fijos de cada sesión y un fotograma cada `stepMs`
- * con [id, estado, última actividad] de las sesiones que había en ese momento. Solo Claude.
+ * con [id, estado, última actividad] de las sesiones que había en ese momento. Claude sale de los eventos de
+ * los hooks; Codex, de los turnos de sus rollouts.
  */
 export type HistoryResponse = {
   from: string;
   to: string;
   stepMs: number;
-  sessions: Record<string, Pick<Session, "id" | "title" | "cwd" | "floor" | "project" | "projectFloor">>;
+  sessions: Record<string, Pick<Session, "id" | "agent" | "title" | "cwd" | "floor" | "project" | "projectFloor">>;
   frames: { at: string; sessions: [id: string, state: SessionState, lastEventAt: string][] }[];
 };
 

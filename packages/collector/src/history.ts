@@ -42,7 +42,7 @@ export function buildHistory(
   events: LoggedEvent[],
   from: number,
   to: number,
-  options: { stepMs?: number; idleMs?: number; titles?: Map<string, string> } = {},
+  options: { stepMs?: number; idleMs?: number; titles?: Map<string, string>; codex?: CodexHistory } = {},
 ): HistoryResponse {
   const stepMs = options.stepMs ?? 5 * 60_000;
   const store = createSessionStore({ idleMs: options.idleMs });
@@ -61,22 +61,53 @@ export function buildHistory(
     store.tick(new Date(t));
     const list = store.list();
     for (const s of list) sessions[s.id] = slim(s, options.titles?.get(s.id));
+    const codex = options.codex ? codexFrame(options.codex, t, stepMs, options.idleMs ?? 30 * 60_000) : [];
+    for (const [id] of codex) sessions[id] ??= slim(options.codex!.sessions.get(id)!);
     frames.push({
       at: new Date(t).toISOString(),
-      sessions: list.map((s) => {
-        const p = peak.get(s.id);
-        return [s.id, p && PRIORITY[p] > PRIORITY[s.state] ? p : s.state, s.lastEventAt];
-      }),
+      sessions: [
+        ...list.map((s): [string, SessionState, string] => {
+          const p = peak.get(s.id);
+          return [s.id, p && PRIORITY[p] > PRIORITY[s.state] ? p : s.state, s.lastEventAt];
+        }),
+        ...codex,
+      ],
     });
   }
   return { from: new Date(from).toISOString(), to: new Date(to).toISOString(), stepMs, sessions, frames };
+}
+
+/** Sesiones de Codex vivas (título, proyecto…) y sus turnos [inicio, fin|null] leídos de los rollouts. */
+export type CodexHistory = { sessions: Map<string, Session>; turns: Map<string, [number, number | null][]> };
+
+/**
+ * Estado de cada sesión de Codex al final del intervalo (t - paso, t]: trabajando si algún turno lo toca;
+ * si no, para revisar hasta `idleMs` después de su último turno y dormida a partir de ahí. Solo aparecen
+ * las que ya habían empezado.
+ */
+export function codexFrame(c: CodexHistory, t: number, stepMs: number, idleMs: number): [string, SessionState, string][] {
+  const out: [string, SessionState, string][] = [];
+  for (const [id, turns] of c.turns) {
+    if (!c.sessions.has(id) || !turns.length || turns[0][0] > t) continue;
+    let busy = false;
+    let last = 0;
+    for (const [start, end] of turns) {
+      if (start > t) break;
+      const until = end ?? Infinity;
+      if (until > t - stepMs) busy = true;
+      last = Math.max(last, Math.min(until, t), start);
+    }
+    const state: SessionState = busy ? "trabajando" : t - last < idleMs ? "para_revisar" : "dormida";
+    out.push([id, state, new Date(last).toISOString()]);
+  }
+  return out;
 }
 
 const PRIORITY: Record<SessionState, number> = { dormida: 0, para_revisar: 1, trabajando: 2, te_necesita: 3 };
 
 /** Lo que el mapa necesita para dibujar una sesión pasada; nada de métricas ni mensajes. */
 function slim(s: Session, title?: string): HistoryResponse["sessions"][string] {
-  return { id: s.id, title: title ?? s.title, cwd: s.cwd, floor: s.floor, project: s.project, projectFloor: s.projectFloor };
+  return { id: s.id, agent: s.agent, title: title ?? s.title, cwd: s.cwd, floor: s.floor, project: s.project, projectFloor: s.projectFloor };
 }
 
 /** Inicio y fin (exclusivo) de un día local AAAA-MM-DD. `undefined` si la fecha no es válida. */

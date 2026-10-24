@@ -1,12 +1,12 @@
 import type { HistoryResponse, Session } from "@ciudad/shared";
 
-/** Sesiones de un fotograma del día rebobinado, con la forma que el mapa y la fachada ya saben dibujar. */
+/** Sesiones de un fotograma del día rebobinado (Claude y Codex), con la forma que el mapa y la fachada ya saben dibujar. */
 export function frameSessions(h: HistoryResponse, index: number): Session[] {
   const frame = h.frames[Math.max(0, Math.min(index, h.frames.length - 1))];
   if (!frame) return [];
   return frame.sessions.flatMap(([id, state, lastEventAt]) => {
     const s = h.sessions[id];
-    return s ? [{ ...s, agent: "claude" as const, state, lastEventAt }] : [];
+    return s ? [{ ...s, agent: s.agent ?? "claude", state, lastEventAt }] : [];
   });
 }
 

@@ -69,7 +69,7 @@ async function feedNewLines(file: string, offset: number, parser: RolloutParser)
 export function createCodexPoller(store: SessionStore, codexDir: string, prices: PriceTable, idleMs: number, days = codexDaysFromEnv(), usage?: UsageStore) {
   // Lectura incremental: solo los bytes nuevos de cada rollout, hasta la última línea completa.
   const cache = new Map<string, { key: string; offset: number; parser: RolloutParser; rollout: CodexRollout | null }>();
-  return async (now = new Date()): Promise<void> => {
+  const poll = async (now = new Date()): Promise<void> => {
     try {
       const files = await findRecentRollouts(path.join(codexDir, "sessions"), now, days * 86_400_000);
       const names = await readThreadNames(codexDir);
@@ -104,6 +104,7 @@ export function createCodexPoller(store: SessionStore, codexDir: string, prices:
           tools: { commands: r.toolCalls, reads: 0, web: 0 },
           log: r.log,
           daily: codexDaily(r.byDay, now),
+          contextPercent: r.contextPercent,
         });
       }
       store.pruneCodex(keep);
@@ -111,6 +112,10 @@ export function createCodexPoller(store: SessionStore, codexDir: string, prices:
       console.error("[collector] error leyendo las sesiones de Codex", err);
     }
   };
+  /** Turnos de cada sesión de Codex leída (sin subagentes), para Rebobinar. */
+  const turns = (): Map<string, [number, number | null][]> =>
+    new Map([...cache.values()].flatMap((e) => (e.rollout && !e.rollout.subagent ? [[e.rollout.id, e.rollout.turns] as const] : [])));
+  return Object.assign(poll, { turns });
 }
 
 /**
@@ -402,7 +407,14 @@ async function handleHook(
  * GET /history?day=AAAA-MM-DD[&step=segundos]: el día reconstruido desde `data/events` (solo metadatos).
  * Lo lee el front desde otro puerto: responde con CORS solo a los orígenes locales permitidos.
  */
-async function handleHistory(req: http.IncomingMessage, res: http.ServerResponse, eventsDir: string, store: SessionStore, idleMs: number) {
+async function handleHistory(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  eventsDir: string,
+  store: SessionStore,
+  idleMs: number,
+  codexTurns?: () => Map<string, [number, number | null][]>,
+) {
   const origin = req.headers.origin;
   if (origin !== undefined && !isAllowedOrigin(origin)) return sendJson(res, 403, { ok: false, error: "forbidden_origin" });
   if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
@@ -416,7 +428,8 @@ async function handleHistory(req: http.IncomingMessage, res: http.ServerResponse
   // Un día de calentamiento: las sesiones abiertas a medianoche empiezan con su estado.
   const events = await readEvents(eventsDir, range.from - 86_400_000, to);
   const titles = new Map(store.list().map((s) => [s.id, s.title]));
-  sendJson(res, 200, buildHistory(events, range.from, to, { stepMs: step * 1000, idleMs, titles }));
+  const codex = codexTurns ? { sessions: new Map(store.list().filter((s) => s.agent === "codex").map((s) => [s.id, s])), turns: codexTurns() } : undefined;
+  sendJson(res, 200, buildHistory(events, range.from, to, { stepMs: step * 1000, idleMs, titles, codex }));
 }
 
 export function createServer(options: ServerOptions = {}): http.Server {
@@ -438,6 +451,8 @@ export function createServer(options: ServerOptions = {}): http.Server {
   const codexRoot = options.codexDir ?? (options.coldStart ? process.env.CIUDAD_CODEX_DIR ?? DEFAULT_CODEX_DIR : false);
   if (codexRoot) transcriptRoots.push(path.join(codexRoot, "sessions"));
 
+  // Sondeo de Codex (si se leen sus rollouts): también da sus turnos a Rebobinar.
+  let codexPoll: ReturnType<typeof createCodexPoller> | undefined;
   const server = http.createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
       const body: HealthResponse = { ok: true, service: "collector" };
@@ -447,7 +462,7 @@ export function createServer(options: ServerOptions = {}): http.Server {
       return sendJson(res, 200, store.list());
     }
     if (req.method === "GET" && req.url?.startsWith("/history?")) {
-      return void handleHistory(req, res, eventsDir, store, idleMs).catch((err) => {
+      return void handleHistory(req, res, eventsDir, store, idleMs, codexPoll?.turns).catch((err) => {
         console.error("[collector] error en /history", err);
         if (!res.headersSent) sendJson(res, 500, { ok: false, error: "internal" });
       });
@@ -484,6 +499,7 @@ export function createServer(options: ServerOptions = {}): http.Server {
   const codexDir = options.codexDir ?? (options.coldStart ? process.env.CIUDAD_CODEX_DIR ?? DEFAULT_CODEX_DIR : false);
   if (codexDir) {
     const poll = createCodexPoller(store, codexDir, prices, idleMs, codexDaysFromEnv(), usage);
+    codexPoll = poll;
     void poll().then(() => console.log(`[collector] Codex: ${store.list().filter((s) => s.agent === "codex").length} sesiones`));
     const codexTimer = setInterval(() => void poll(), options.codexPollMs ?? 3000);
     codexTimer.unref();

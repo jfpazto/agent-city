@@ -65,8 +65,8 @@ Codex no necesita instalar nada: se leen sus rollouts de `~/.codex/sessions`.
 
 ## Limitaciones conocidas
 
-- Codex: sin hooks todavía, así que no hay «te necesita», coste ni Rebobinar para sus sesiones.
-- El % de contexto sale de la statusline, que solo ejecuta Claude Code en la terminal (la app de escritorio no la ejecuta).
+- Codex: sin hooks todavía, así que no hay «te necesita» ni coste para sus sesiones. El % de contexto y Rebobinar sí funcionan: salen de sus rollouts.
+- En Claude, el % de contexto sale de la statusline, que solo ejecuta Claude Code en la terminal (la app de escritorio no la ejecuta).
 
 ## Sistemas operativos
 
