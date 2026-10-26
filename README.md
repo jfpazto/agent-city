@@ -14,7 +14,7 @@ Una ciudad 2.5D en el navegador para ver de un vistazo todas tus sesiones de Cla
 - **Avisos**: avioneta con pancarta, notificación del sistema y campanilla opcional cuando algo te necesita o termina.
 - **Acciones desde la fachada**: abrir una sesión en su app, crear una nueva o mandarla a la Papelera.
 
-![Mapa de la ciudad: barrio Claude y barrio Codex, un edificio por proyecto](docs/capturas/mapa-demo-20261024.png)
+![Mapa de la ciudad: barrio Claude y barrio Codex, un edificio por proyecto, rodeados por las afueras](docs/capturas/mapa-demo-20261026.png)
 
 | Fachada de un proyecto | Panel de una sesión |
 |---|---|
