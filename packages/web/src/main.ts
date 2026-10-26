@@ -24,7 +24,7 @@ import { firstBusyFrame, frameSessions, frameTime, replayDays } from "./world/re
 // que con suavizado y al doble de densidad mantienen las letras nítidas también con zoom.
 TextureSource.defaultOptions.scaleMode = "linear";
 const app = new Application();
-await app.init({ background: "#AEC5A2", resizeTo: window, roundPixels: true, antialias: false, resolution: Math.max(2, window.devicePixelRatio || 1), autoDensity: true });
+await app.init({ background: "#E4E2D6", resizeTo: window, roundPixels: true, antialias: false, resolution: Math.max(2, window.devicePixelRatio || 1), autoDensity: true });
 document.body.appendChild(app.canvas);
 app.ticker.maxFPS = 30;
 
@@ -444,7 +444,7 @@ function render(): void {
     panel.update(sessions);
     refreshUrgent();
     const current = groups.find((g) => g.id === selectedBuilding);
-    backdrop.clear().rect(0, 0, app.screen.width, app.screen.height).fill(current ? "#9DC6E9" : "#AEC5A2");
+    backdrop.clear().rect(0, 0, app.screen.width, app.screen.height).fill(current ? "#E8E3D5" : "#E4E2D6");
     ui.update(world, selectedBuilding, districtFocus, preferences.relations, preferences.motion, reducedMotion.matches, panel.openId);
     const viewport = mapViewport();
     if (!mapCamera || (!dataFitted && sessions.length)) {

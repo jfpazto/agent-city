@@ -318,3 +318,9 @@ npm run autostart:uninstall && npm run hooks:uninstall
 4. Abre `README.md`: las tres imágenes deben cargar y corresponder a esos proyectos, sin nombres ni rutas reales.
 
 Resultado: capturas renovadas y revisadas visualmente; consola del navegador sin errores.
+
+## Afueras de la ciudad (2026-10-25)
+
+1. `npm run dev` y abre localhost:5173.
+2. Aleja con la rueda y arrastra fuera del recuadro de barrios.
+3. Esperado: alrededor del plano hay una ciudad 2.5D (misma perspectiva que los edificios de los barrios): adosados de ladrillo con tejado de pizarra, casas encaladas con teja, bloques de pisos de varias alturas, plazas con fuente, parques, árboles y farolas, con calles de manzanas de tamaño variable. Las dos avenidas cruzan el paseo y siguen por fuera con el mismo color y marcas discontinuas; las calles solo llevan marcas entre cruces. Una bruma clara la difumina con la distancia y el borde se funde con el fondo sin corte. Es decorativo, fijo entre recargas y no responde a datos.

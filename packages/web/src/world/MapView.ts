@@ -4,6 +4,8 @@ import { LOT_H, LOT_W, ROAD, ROOF_DEPTH, pennantColors, pointOnPath, type Distri
 import { facilityRect, type UsageView, type WindowView } from "./usage.ts";
 
 const FONT = "JetBrains Mono, ui-monospace, monospace";
+/** Margen decorativo alrededor del plano, en píxeles de mundo. */
+const OUTSKIRTS = 1400;
 type Traveler = { sprite: Graphics; path: Point[]; period: number; offset: number };
 
 /** Color del nivel: normal por proveedor, ámbar si queda poco, rojo si se agotó, gris sin dato. */
@@ -20,6 +22,208 @@ export class MapView {
   private usage = new Container();
   private drips: Array<{ sprite: Graphics; x: number; y: number }> = [];
   private steam: Array<{ sprite: Graphics; x: number; y: number; strength: number }> = [];
+
+  /** Afueras decorativas: ciudad 2.5D (adosados, casas encaladas, bloques de pisos, plazas, parques, farolas). No representan datos; semilla fija. */
+  private drawOutskirts(g: Graphics, world: WorldLayout): void {
+    const { w: W, h: H } = world.bounds;
+    const M = OUTSKIRTS;
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+    const pick = <T,>(list: T[]) => list[Math.floor(rnd() * list.length)];
+    const rect = (x: number, y: number, w: number, h: number, color: string) => g.rect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)).fill(color);
+    const cx = world.districts[0].x + world.districts[0].w + 42, cy = H / 2;
+    const STREET = 30, WALK = 7;
+
+    rect(-M, -M, W + 2 * M, H + 2 * M, "#8D9E9A");
+
+    const AV = 44;
+    // Cada línea es el borde izquierdo/superior de una calle; la central es la avenida (más ancha).
+    const lines = (center: number, min: number, max: number, lo: number, hi: number) => {
+      const out: number[] = [];
+      for (let v = center - AV / 2; v > lo; ) out.unshift((v -= min + rnd() * (max - min) + STREET));
+      const right: number[] = [];
+      for (let v = center + AV / 2; v < hi; v += min + rnd() * (max - min)) { right.push(v); v += STREET; }
+      return { starts: [...out, center - AV / 2, ...right], avenue: out.length };
+    };
+    const lx = lines(cx, 170, 260, -M, W + M), ly = lines(cy, 130, 190, -M, H + M);
+    const xs = lx.starts, ys = ly.starts;
+    const widthAt = (list: number[], k: number, avenue: number) => (k === avenue ? AV : STREET);
+
+    // Todo lo que tiene altura se dibuja al final, ordenado por su base, para que los de delante tapen a los de detrás.
+    type Prop = { base: number; draw: () => void };
+    const props: Prop[] = [];
+
+    const tree = (x: number, y: number, big = false) => props.push({ base: y + 16, draw: () => {
+      const s = big ? 1.4 : 1;
+      g.ellipse(x + 8 * s, y + 17 * s, 9 * s, 3 * s).fill({ color: "#3E4B3F", alpha: 0.18 });
+      rect(x + 6 * s, y + 9 * s, 3 * s, 8 * s, "#7A6B55");
+      rect(x, y, 16 * s, 11 * s, "#6C9573");
+      rect(x + 2 * s, y - 4 * s, 12 * s, 6 * s, "#86AD84");
+      rect(x + 5 * s, y - 6 * s, 6 * s, 3 * s, "#A2C49A");
+      rect(x + 10 * s, y + 3 * s, 5 * s, 6 * s, "#5B8364");
+    } });
+    const lamp = (x: number, y: number) => props.push({ base: y, draw: () => {
+      g.ellipse(x + 1, y + 1, 5, 2).fill({ color: "#F6DDA0", alpha: 0.35 });
+      rect(x, y - 16, 2, 16, "#3A3F52");
+      rect(x - 2, y - 19, 6, 3, "#3A3F52");
+      rect(x - 1, y - 16, 4, 2, "#F6DDA0");
+    } });
+
+    /** Volumen en perspectiva caballera, como los edificios de la ciudad: azotea, fachada sur y lateral este. */
+    type Style = { roof: string; roofDark: string; front: string; side: string; window: string; pitched: boolean };
+    const building = (x: number, y: number, w: number, d: number, h: number, st: Style) => props.push({ base: y + d, draw: () => {
+      const side = Math.round(h * 0.45);
+      g.rect(x + 4, y + d - 2, w + side + 2, 8).fill({ color: "#2F3A3A", alpha: 0.16 });
+      // Fachada sur.
+      rect(x, y + d - h, w, h, st.front);
+      rect(x, y + d - 3, w, 3, "#00000022");
+      // Lateral este.
+      g.poly([x + w, y + d - h, x + w + side, y + d - h - side * 0.5, x + w + side, y + d - side * 0.5, x + w, y + d]).fill(st.side);
+      // Ventanas por planta.
+      for (let fy = y + d - h + 6; fy < y + d - 9; fy += 11) for (let fx = x + 4; fx < x + w - 5; fx += 9) rect(fx, fy, 4, 5, st.window);
+      // Puerta.
+      rect(x + Math.round(w / 2) - 3, y + d - 9, 6, 9, "#4C4038");
+      // Cubierta.
+      const top = y + d - h - d;
+      rect(x, top, w, d, st.roof);
+      g.poly([x + w, top, x + w + side, top - side * 0.5, x + w + side, top + d - side * 0.5, x + w, top + d]).fill(st.roofDark);
+      if (st.pitched) {
+        rect(x, top + Math.round(d / 2), w, Math.ceil(d / 2), st.roofDark);
+        rect(x, top + Math.round(d / 2), w, 1, "#00000030");
+        rect(x + w - 8, top - 4, 4, 7, "#7D5A48");
+      } else {
+        rect(x + 2, top + 2, w - 4, d - 4, st.roofDark);
+        rect(x + 3, top + 3, w - 6, d - 6, st.roof);
+        if (w > 30) { rect(x + 6, top + 4, 10, 8, "#9AA3A6"); rect(x + 7, top + 1, 8, 4, "#B7BFC1"); }
+      }
+    } });
+
+    const styles: Record<string, Style[]> = {
+      brick: [
+        { roof: "#6F7682", roofDark: "#5A616C", front: "#B0644E", side: "#8F4F3E", window: "#E9DDC4", pitched: true },
+        { roof: "#757B85", roofDark: "#5F6570", front: "#A85A47", side: "#874637", window: "#EDE2CA", pitched: true },
+      ],
+      white: [
+        { roof: "#CF7A55", roofDark: "#B0603F", front: "#F3EDE0", side: "#D9D0BE", window: "#6E8A9A", pitched: true },
+        { roof: "#C96F4B", roofDark: "#A85A3B", front: "#EEDFC0", side: "#D2C19F", window: "#6E8A9A", pitched: true },
+      ],
+      flats: [
+        { roof: "#D8D4C6", roofDark: "#BDB8A8", front: "#E3D6BC", side: "#C3B596", window: "#5F7B8C", pitched: false },
+        { roof: "#D2D7D3", roofDark: "#B5BCB8", front: "#C9D3D2", side: "#A8B6B6", window: "#4F6B7C", pitched: false },
+      ],
+    };
+
+    for (let i = 0; i < xs.length - 1; i++) for (let j = 0; j < ys.length - 1; j++) {
+      const bx = xs[i] + widthAt(xs, i, lx.avenue), by = ys[j] + widthAt(ys, j, ly.avenue), bw = xs[i + 1] - bx, bh = ys[j + 1] - by;
+      if (bw < 60 || bh < 60) continue;
+      if (bx > -60 && bx + bw < W + 60 && by > -60 && by + bh < H + 60) continue;
+      rect(bx - WALK, by - WALK, bw + 2 * WALK, bh + 2 * WALK, "#D3CEBF");
+      rect(bx - WALK, by + bh + WALK - 2, bw + 2 * WALK, 2, "#B3AE9F");
+      rect(bx, by, bw, bh, "#BFCBAE");
+      const kind = rnd();
+      if (kind < 0.36) {
+        // Adosados de ladrillo en dos hileras (Liverpool), con patios.
+        const st = pick(styles.brick);
+        for (const row of [0, 1]) {
+          const d = 22, y = row === 0 ? by + 30 : by + bh - 6 - d;
+          for (let x = bx + 4; x < bx + bw - 30; x += 26) building(x, y, 24, d, 22 + (row ? 2 : 0), st);
+        }
+      } else if (kind < 0.62) {
+        // Casas encaladas con teja (España) y patio con árbol.
+        const st = pick(styles.white);
+        let x = bx + 4;
+        while (x < bx + bw - 34) {
+          const w = 30 + Math.round(rnd() * 14);
+          if (x + w > bx + bw - 14) break;
+          building(x, by + bh - 40, w, 30, 18 + Math.round(rnd() * 10), st);
+          x += w + 4;
+        }
+        tree(bx + 12 + rnd() * (bw - 40), by + 10);
+        tree(bx + 12 + rnd() * (bw - 40), by + 20, true);
+      } else if (kind < 0.8) {
+        // Bloques de pisos de varias alturas.
+        const st = pick(styles.flats);
+        const n = bw > 200 ? 3 : 2, w = (bw - 30) / n - 10;
+        for (let k = 0; k < n; k++) building(bx + 8 + k * (w + 10), by + bh - 50, w, 40, 40 + Math.round(rnd() * 34), st);
+        tree(bx + 6, by + 8);
+        tree(bx + bw - 30, by + 12);
+      } else if (kind < 0.9) {
+        // Plaza con fuente, bancos y arbolado.
+        rect(bx, by, bw, bh, "#E1D7C1");
+        for (let x = bx + 6; x < bx + bw - 6; x += 14) for (let y = by + 6; y < by + bh - 6; y += 14) rect(x, y, 7, 1, "#D3C6AA");
+        const fx = bx + bw / 2, fy = by + bh / 2;
+        g.ellipse(fx, fy + 3, 20, 10).fill("#B3AB98");
+        g.ellipse(fx, fy, 18, 9).fill("#C7C0AE");
+        g.ellipse(fx, fy, 14, 6).fill("#8DB3C1");
+        rect(fx - 2, fy - 12, 4, 12, "#C7C0AE");
+        g.ellipse(fx, fy - 13, 5, 2).fill("#BFE0EA");
+        for (let x = bx + 10; x < bx + bw - 20; x += 34) { tree(x, by + 8); tree(x + 14, by + bh - 28); }
+        rect(fx - 40, fy + 20, 16, 3, "#8C7B66");
+        rect(fx + 24, fy + 20, 16, 3, "#8C7B66");
+      } else {
+        // Parque con camino curvo y arboleda.
+        rect(bx, by, bw, bh, "#ADC495");
+        for (let t = 0; t <= 1; t += 0.02) {
+          const px = bx + t * bw, py = by + bh / 2 + Math.sin(t * Math.PI * 2) * bh * 0.2;
+          rect(px, py, 6, 6, "#E1D7C1");
+        }
+        for (let k = 0; k < (bw * bh) / 1500; k++) tree(bx + 6 + rnd() * (bw - 30), by + 10 + rnd() * (bh - 30), rnd() < 0.3);
+      }
+      // Farolas en la acera sur, en los bordes y cada ~70 px.
+      for (let x = bx + 6; x < bx + bw; x += 70) lamp(x, by + bh + WALK - 1);
+    }
+
+    // Marcas viales: discontinuas como las de la ciudad, solo entre cruces.
+    const dash = "#C5D0CF";
+    xs.forEach((x, i) => {
+      const sw = widthAt(xs, i, lx.avenue);
+      ys.forEach((y, j) => {
+        const from = y + widthAt(ys, j, ly.avenue) + 10, to = (ys[j + 1] ?? H + M) - 10;
+        for (let v = from; v < to - 12; v += 44) rect(x + sw / 2 - 1, v, 2, Math.min(22, to - v), dash);
+      });
+    });
+    ys.forEach((y, j) => {
+      const sh = widthAt(ys, j, ly.avenue);
+      xs.forEach((x, i) => {
+        const from = x + widthAt(xs, i, lx.avenue) + 10, to = (xs[i + 1] ?? W + M) - 10;
+        for (let v = from; v < to - 12; v += 44) rect(v, y + sh / 2 - 1, Math.min(22, to - v), 2, dash);
+      });
+    });
+
+    props.sort((p, q) => p.base - q.base).forEach((p) => p.draw());
+
+    // Bruma: suave cerca, y se funde con el fondo antes del borde, sin cortes.
+    const FOG = "#E4E2D6";
+    const veil = (pad: number, alpha: number) => {
+      const x0 = -pad, y0 = -pad, x1 = W + pad, y1 = H + pad, E = M + 2000;
+      g.rect(-E, -E, W + 2 * E, y0 + E).fill({ color: FOG, alpha });
+      g.rect(-E, y1, W + 2 * E, H + E - y1).fill({ color: FOG, alpha });
+      g.rect(-E, y0, x0 + E, y1 - y0).fill({ color: FOG, alpha });
+      g.rect(x1, y0, W + E - x1, y1 - y0).fill({ color: FOG, alpha });
+    };
+    veil(0, 0.2);
+    // Avenidas con el mismo color que dentro de la ciudad; la bruma las funde a lo lejos como al resto.
+    const avenue = (x: number, y: number, w: number, h: number, vertical: boolean) => {
+      rect(x, y, w, h, "#6D8581");
+      const n = vertical ? h : w;
+      for (let o = 10; o < n - 10; o += 44) rect(vertical ? x + w / 2 - 1 : x + o, vertical ? y + o : y + h / 2 - 1, vertical ? 2 : Math.min(22, n - 10 - o), vertical ? Math.min(22, n - 10 - o) : 2, dash);
+    };
+    avenue(cx - AV / 2, -M, AV, H + 2 * M, true);
+    avenue(-M, cy - AV / 2, W + 2 * M, AV, false);
+    for (let pad = 300; pad < M - 300; pad += 150) veil(pad, 0.1);
+    for (let pad = M - 300; pad < M; pad += 30) veil(pad, 0.22);
+    veil(M, 1);
+
+    // Paseo alrededor del plano; las avenidas lo cruzan hasta la ciudad.
+    const P = 56;
+    rect(-P, -P, W + 2 * P, H + 2 * P, "#E1DCCB");
+    rect(-P, H + P - 3, W + 2 * P, 3, "#C7C0AC");
+    const first = world.districts[0], last = world.districts[world.districts.length - 1];
+    avenue(cx - AV / 2, -P, AV, P, true);
+    avenue(cx - AV / 2, H, AV, P, true);
+    avenue(-P, cy - AV / 2, P + first.x - 8, AV, false);
+    avenue(last.x + last.w + 8, cy - AV / 2, W + P - last.x - last.w - 8, AV, false);
+  }
 
   update(world: WorldLayout, highlighted: string | null): void {
     for (const child of this.root.removeChildren()) if (child !== this.usage) child.destroy({ children: true });
@@ -43,8 +247,10 @@ export class MapView {
       }
     };
 
+    this.drawOutskirts(g, world);
     rect(0, 0, world.bounds.w, world.bounds.h, "#AEC5A2");
     const avenueX = world.districts[0].x + world.districts[0].w + 20;
+    // Las avenidas siguen hacia las afueras en drawOutskirts, con el mismo trazado.
     road(avenueX, 0, 44, world.bounds.h, true);
     road(0, world.bounds.h - 42, world.bounds.w, 42, false);
 
